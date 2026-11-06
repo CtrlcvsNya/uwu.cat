@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "UWU.CAT",
-  description: "In a cat’s eyes, all things belong to dreams.",
+  title: "In a cat’s eyes, all things belong to dreams.",
+  description: "UWU.CAT — Uplift With Uniqueness . Cats Always Touch",
 };
 
 export default function RootLayout({
