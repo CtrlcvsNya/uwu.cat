@@ -152,9 +152,9 @@ export default function Home() {
             <AsciiVideo src="/media/bg-480p.mp4" revealed={phase === "block"} className="fixed inset-0 z-0"/>
             {/* 中心压暗，保证文字可读 */}
             <div className="pointer-events-none fixed inset-0 z-0 bg-[radial-gradient(ellipse_at_center,rgba(0,0,0,0.6)_0%,rgba(0,0,0,0)_60%)]"/>
-            {/* CRT 扫描线 + 缓慢滚动的刷新亮带：盖在整页（包括方框）上 */}
-            <div className="scanlines pointer-events-none fixed inset-0 z-20"/>
-            <div className="crt-roll pointer-events-none fixed inset-x-0 top-0 z-20 h-[18vh]"/>
+            {/* CRT 扫描线 + 缓慢滚动的刷新亮带：只盖在背景上，不压住方框和文字 */}
+            <div className="scanlines pointer-events-none fixed inset-0 z-[1]"/>
+            <div className="crt-roll pointer-events-none fixed inset-x-0 top-0 z-[1] h-[18vh]"/>
             {/* 全屏胶片颗粒 */}
             <div className="grain pointer-events-none fixed inset-0 z-30 opacity-[0.06] mix-blend-overlay"/>
 
