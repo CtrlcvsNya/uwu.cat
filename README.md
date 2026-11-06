@@ -1,36 +1,46 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# UWU.CAT
 
-## Getting Started
+> In a cat’s eyes, all things belong to dreams.
 
-First, run the development server:
+Source of [uwu.cat](https://uwu.cat) — a tiny personal landing page with a real-time **ASCII video background** rendered by a WebGL shader, in the spirit of the old Midjourney homepage.
+
+## Features
+
+- **ASCII video in a fragment shader** — the video is sampled per character cell on the GPU and mapped to a glyph atlas by brightness. The CPU only uploads one video texture per frame.
+- **CRT look** — phosphor glow, RGB fringing, scanlines, aperture mask, rolling band and barrel curvature.
+- **Interaction** — a scrambling lens follows the cursor; every click drops a water ripple (up to 8 at once) that refracts the video.
+- **Intro animation** — the sentence *Uplift With Uniqueness . Cats Always Touch* collapses into its initials **UWU.CAT**, which then fly into the card as the background decodes in.
+- Respects `prefers-reduced-motion`, pauses when the tab is hidden, falls back to a plain video without WebGL.
+
+## Stack
+
+[Next.js](https://nextjs.org) (static export) · [Motion](https://motion.dev) · Tailwind CSS v4 · WebGL · [Cloudflare Workers](https://developers.cloudflare.com/workers/static-assets/)
+
+## Development
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run dev        # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+| Path | What |
+| --- | --- |
+| `src/app/page.tsx` | Page & intro animation timeline |
+| `src/app/components/AsciiVideo.tsx` | WebGL ASCII / CRT renderer |
+| `worker/index.ts` | Adds HTTP Range (206) support for videos — required by Safari / iOS |
+| `scripts/media-sizes.mjs` | Records media file sizes for the worker at build time |
+| `.github/workflows/deploy.yml` | CI: build on PRs, deploy on `master` |
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Deployment
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Every push to `master` is built and deployed to Cloudflare Workers by GitHub Actions.
+To deploy your own fork, set two repository secrets:
 
-## Learn More
+- `CLOUDFLARE_API_TOKEN` — an API token created from the **Edit Cloudflare Workers** template
+- `CLOUDFLARE_ACCOUNT_ID`
 
-To learn more about Next.js, take a look at the following resources:
+and change `name` / `routes` in `wrangler.jsonc`. Manual deploy: `npm run deploy`.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+---
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+© Ctrlcvs — not for sale, AI last.

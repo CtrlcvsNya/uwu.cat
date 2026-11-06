@@ -1,0 +1,486 @@
+"use client";
+import React, {useEffect, useRef, useState} from "react";
+
+/**
+ * AsciiVideo —— 用 WebGL 把视频渲染成「字符画」背景（Midjourney 旧官网那种感觉）
+ * ------------------------------------------------------------------
+ * 所有逐字符的计算都在 fragment shader 里完成：
+ *   1. 屏幕按 cellW×cellH 切成网格，每格采样视频的平均颜色
+ *   2. 亮度 → 字符密度表里的一个字符（字形来自预先绘制好的 atlas 纹理）
+ *   3. CRT 质感：荧光光晕、RGB 色散、扫描线、荧光粉栅格、屏幕弧度
+ *   4. 叠加特效：入场扫描、随机闪烁、鼠标透镜扰动、点击水滴波纹（可叠加多个）、暗角
+ * CPU 每帧只做一次视频纹理上传 + 一次 drawArrays，性能开销极小。
+ */
+
+type Props = {
+    src: string;
+    /** 为 true 时开始入场扫描动画；之前只渲染黑屏（视频会提前加载） */
+    revealed?: boolean;
+    /** 入场扫描时长（秒） */
+    revealDuration?: number;
+    /** 字符宽度（CSS px），高度自动 ×1.6；越小越细腻 */
+    cellSize?: number;
+    /** 字符密度表，从暗到亮 */
+    charset?: string;
+    /** 强调色（扫描边缘、鼠标、冲击波） */
+    accent?: string;
+    /** 渲染帧率上限 */
+    maxFps?: number;
+    className?: string;
+    style?: React.CSSProperties;
+};
+
+type VFCVideo = HTMLVideoElement & {
+    requestVideoFrameCallback(cb: () => void): number;
+    cancelVideoFrameCallback(handle: number): void;
+};
+
+const DEFAULT_CHARSET = " .:-~=+*xoeO#%&@";
+
+const VERT = `
+attribute vec2 aPos;
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
+`;
+
+const MAX_RIPPLES = 8;
+
+const FRAG = `
+precision highp float;
+
+#define MAX_RIPPLES ${MAX_RIPPLES}
+#define RIPPLE_LIFE 2.6
+
+uniform sampler2D uVideo;
+uniform sampler2D uAtlas;
+uniform vec2  uRes;        // 画布尺寸（设备像素）
+uniform vec2  uCellSize;   // 单个字符格尺寸（设备像素）
+uniform vec2  uGrid;       // 列数, 行数
+uniform vec4  uCover;      // 视频 uv: offset.xy, scale.zw（object-fit: cover）
+uniform float uGlyphs;     // 字符数量
+uniform float uTime;
+uniform vec4  uMouse;      // x, y, 半径, 强度
+uniform vec3  uRipples[MAX_RIPPLES]; // 每个水波: x, y, 产生时间
+uniform float uReveal;     // 0..1 入场进度
+uniform float uMotion;     // 1 = 正常, 0 = 用户偏好减少动态效果
+uniform vec3  uAccent;
+
+float hash(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+
+vec3 sampleVideo(vec2 cuv) {
+    vec2 vuv = uCover.xy + clamp(cuv, 0.0, 1.0) * uCover.zw;
+    vec2 d   = uCover.zw / uGrid * 0.25;
+    vec3 col = texture2D(uVideo, vuv + vec2(-d.x, -d.y)).rgb
+             + texture2D(uVideo, vuv + vec2( d.x, -d.y)).rgb
+             + texture2D(uVideo, vuv + vec2(-d.x,  d.y)).rgb
+             + texture2D(uVideo, vuv + vec2( d.x,  d.y)).rgb;
+    return col * 0.25;
+}
+
+void main() {
+    vec2 screen = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y);
+
+    // ---- CRT 屏幕弧度：桶形畸变，四角收成圆角 ----
+    vec2 sq = screen / uRes * 2.0 - 1.0;
+    sq *= 1.0 + vec2(0.018, 0.028) * dot(sq, sq);
+    vec2 edge = smoothstep(vec2(0.0), vec2(0.004, 0.006), 1.0 - abs(sq));
+    float screenMask = edge.x * edge.y;
+    if (screenMask <= 0.0 || uReveal <= 0.0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
+    vec2 px = (sq * 0.5 + 0.5) * uRes;
+
+    vec2 cell   = floor(px / uCellSize);
+    vec2 local  = fract(px / uCellSize);
+    vec2 center = (cell + 0.5) * uCellSize;
+
+    float h     = hash(cell + 17.0);
+    float tick  = floor(uTime * 12.0);
+    float flick = hash(cell + vec2(tick * 0.137 + 3.1, tick * 0.291 + 7.7));
+
+    // ---- 入场扫描：左上→右下的解码波前（最先判断，未揭开的格子直接输出黑色） ----
+    float t     = 0.02 + (cell.x / uGrid.x) * 0.7 + (cell.y / uGrid.y) * 0.15 + h * 0.13;
+    float front = uReveal * 1.25 - t;
+    if (front <= 0.0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
+
+    // ---- 水滴波纹：每个点击独立叠加，产生折射位移 + 波峰高光 ----
+    vec2  disp  = vec2(0.0);
+    float crest = 0.0;
+    float splash = 0.0;
+    float wl    = uCellSize.y * 4.5;                 // 波长
+    float speed = max(uRes.x, uRes.y) * 0.28;        // 扩散速度（px/s）
+    for (int i = 0; i < MAX_RIPPLES; i++) {
+        vec3 r = uRipples[i];
+        float age = uTime - r.z;
+        if (age < 0.0 || age > RIPPLE_LIFE) continue;
+        vec2  dv   = center - r.xy;
+        float dist = length(dv);
+        float x    = dist - age * speed;
+        float env  = exp(-(x + wl) * (x + wl) / (wl * wl * 2.2));
+        float life = 1.0 - age / RIPPLE_LIFE;
+        float w    = sin(x / wl * 6.2832) * env * life * life;
+        disp  += dv / max(dist, 1.0) * w;
+        crest  = max(crest, smoothstep(0.25, 0.9, w));
+        splash = max(splash, (1.0 - smoothstep(0.0, uCellSize.y * 3.0, dist)) * (1.0 - smoothstep(0.0, 0.35, age)));
+    }
+
+    vec2 cuv = (cell + 0.5) / uGrid - disp * wl * 0.45 / (uGrid * uCellSize);
+    vec3 col = sampleVideo(cuv);
+
+    float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+    lum = smoothstep(0.03, 0.85, lum + dot(disp, vec2(0.12)) * 0.5);
+
+    vec3 base = mix(vec3(lum), col, 1.45) * 1.35;
+    vec3 c = base;
+
+    float g = floor(lum * (uGlyphs - 1.0) + mix(0.5, flick, 0.45 * uMotion));
+
+    if (uMotion > 0.5 && lum > 0.12 && flick > 0.996) {
+        g = 1.0 + floor(hash(cell + tick) * (uGlyphs - 1.0));
+        c = uAccent * 1.2;
+    }
+
+    float md = length(center - uMouse.xy) / max(uMouse.z, 1.0);
+    float m  = (1.0 - smoothstep(0.0, 1.0, md)) * uMouse.w;
+    if (m > 0.001) {
+        if (flick < m * 0.6) g = 1.0 + floor(hash(cell + tick * 1.31) * (uGlyphs - 1.0));
+        c = mix(c, uAccent, m * 0.55) + m * 0.12;
+    }
+
+    if (crest > 0.0) {
+        g += crest * 5.0;
+        if (crest > 0.55 && flick < 0.35) g = 1.0 + floor(hash(cell + tick * 2.7) * (uGlyphs - 1.0));
+        c = mix(c, uAccent * 1.3 + 0.15, crest * 0.75);
+    }
+    if (splash > 0.0) {
+        g = mix(g, uGlyphs - 1.0, splash);
+        c = mix(c, vec3(1.0), splash);
+    }
+
+    if (front < 0.14) {
+        float e = front / 0.14;
+        g = 1.0 + floor(hash(cell + tick * 3.1) * (uGlyphs - 1.0));
+        c = mix(vec3(1.0), uAccent, e) * (1.6 - e * 0.6);
+        c = mix(c, base, smoothstep(0.6, 1.0, e));
+    }
+
+    g = clamp(floor(g), 0.0, uGlyphs - 1.0);
+
+    // ---- 字形：atlas 上半是锐利字形，下半是预模糊的“荧光”字形 ----
+    // RGB 三通道错开一点点采样 → CRT 色散边
+    float ca = 0.07;
+    float aR = texture2D(uAtlas, vec2((g + clamp(local.x - ca, 0.0, 0.999)) / uGlyphs, local.y * 0.5)).a;
+    float aG = texture2D(uAtlas, vec2((g + local.x) / uGlyphs, local.y * 0.5)).a;
+    float aB = texture2D(uAtlas, vec2((g + clamp(local.x + ca, 0.0, 0.999)) / uGlyphs, local.y * 0.5)).a;
+    float glow = texture2D(uAtlas, vec2((g + local.x) / uGlyphs, 0.5 + local.y * 0.5)).a;
+
+    vec3 rgb = c * vec3(aR, aG, aB) + c * glow * 0.85;
+
+    // 荧光粉余辉：平滑的视频底色，让整屏有一层微微发光的雾
+    vec3 haze = texture2D(uVideo, uCover.xy + px / uRes * uCover.zw).rgb;
+    rgb += haze * haze * 0.22;
+
+    // ---- 扫描线 + 荧光粉 RGB 栅格 + 缓慢滚动的亮带 ----
+    float scan = 0.78 + 0.22 * cos(screen.y * 6.2832 / 3.0);
+    float slot = mod(floor(screen.x), 3.0);
+    vec3 mask = vec3(0.9) + 0.1 * vec3(slot == 0.0, slot == 1.0, slot == 2.0) * 2.0 - 0.067;
+    float roll = 1.0 + 0.07 * uMotion * smoothstep(0.0, 0.15, 0.15 - abs(fract(screen.y / uRes.y - uTime * 0.07) - 0.5));
+    rgb *= scan * mask * roll;
+
+    // 暗角 + 屏幕边缘
+    vec2 q = px / uRes - 0.5;
+    float vig = clamp(1.15 - dot(q, q) * 1.6, 0.0, 1.0);
+
+    gl_FragColor = vec4(rgb * vig * screenMask, 1.0);
+}
+`;
+
+function hexToRgb(hex: string): [number, number, number] {
+    const n = parseInt(hex.replace("#", ""), 16);
+    return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
+
+function compile(gl: WebGLRenderingContext, type: number, src: string) {
+    const s = gl.createShader(type)!;
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        throw new Error(gl.getShaderInfoLog(s) ?? "shader compile error");
+    }
+    return s;
+}
+
+/** 把字符表画成一张横向 atlas：每个字形正好占 cellW×cellH 设备像素 */
+function buildAtlas(charset: string, cellW: number, cellH: number, fontFamily: string) {
+    // 两行：上行锐利字形，下行同一字形的模糊光晕（用于 CRT 荧光效果）
+    const c = document.createElement("canvas");
+    c.width = cellW * charset.length;
+    c.height = cellH * 2;
+    const ctx = c.getContext("2d")!;
+    ctx.fillStyle = "#fff";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = `600 ${Math.round(cellH * 0.78)}px ${fontFamily}`;
+    for (let i = 0; i < charset.length; i++) {
+        ctx.fillText(charset[i], i * cellW + cellW / 2, cellH / 2 + 1);
+    }
+    // 光晕行：把字画在画布外，只让阴影落进来 —— 比 ctx.filter 兼容性更好
+    const OFF = 100000;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, cellH, c.width, cellH);
+    ctx.clip();
+    ctx.shadowColor = "#fff";
+    ctx.shadowBlur = Math.max(2, cellH * 0.22);
+    ctx.shadowOffsetX = OFF;
+    for (let pass = 0; pass < 2; pass++) {
+        for (let i = 0; i < charset.length; i++) {
+            ctx.fillText(charset[i], i * cellW + cellW / 2 - OFF, cellH * 1.5 + 1);
+        }
+    }
+    ctx.restore();
+    return c;
+}
+
+export default function AsciiVideo({
+                                       src,
+                                       revealed = true,
+                                       revealDuration = 1.8,
+                                       cellSize = 6,
+                                       charset = DEFAULT_CHARSET,
+                                       accent = "#ceff1c",
+                                       maxFps = 30,
+                                       className,
+                                       style,
+                                   }: Props) {
+    const canvasRef = useRef<HTMLCanvasElement>(null);
+    const videoRef = useRef<HTMLVideoElement>(null);
+    const revealedRef = useRef(revealed);
+    const [fallback, setFallback] = useState(false);
+
+    useEffect(() => {
+        revealedRef.current = revealed;
+    }, [revealed]);
+
+    useEffect(() => {
+        const canvas = canvasRef.current!;
+        const video = videoRef.current! as VFCVideo;
+        const gl = canvas.getContext("webgl", {antialias: false, alpha: false, powerPreference: "low-power"});
+        if (!gl) {
+            setFallback(true);
+            return;
+        }
+
+        // ---------- 程序 & 几何 ----------
+        let prog: WebGLProgram;
+        try {
+            prog = gl.createProgram()!;
+            gl.attachShader(prog, compile(gl, gl.VERTEX_SHADER, VERT));
+            gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, FRAG));
+            gl.linkProgram(prog);
+            if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog) ?? "link error");
+        } catch (e) {
+            console.error(e);
+            setFallback(true);
+            return;
+        }
+        gl.useProgram(prog);
+
+        const buf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+        const aPos = gl.getAttribLocation(prog, "aPos");
+        gl.enableVertexAttribArray(aPos);
+        gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+        const U = (name: string) => gl.getUniformLocation(prog, name);
+        const u = {
+            video: U("uVideo"), atlas: U("uAtlas"), res: U("uRes"), cellSize: U("uCellSize"),
+            grid: U("uGrid"), cover: U("uCover"), glyphs: U("uGlyphs"), time: U("uTime"),
+            mouse: U("uMouse"), ripples: U("uRipples"), reveal: U("uReveal"), motion: U("uMotion"),
+            accent: U("uAccent"),
+        };
+
+        const makeTex = (unit: number, filter: number) => {
+            const t = gl.createTexture();
+            gl.activeTexture(gl.TEXTURE0 + unit);
+            gl.bindTexture(gl.TEXTURE_2D, t);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+            // 1×1 黑色占位，避免视频没就绪时采样报警告
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]));
+            return t;
+        };
+        const videoTex = makeTex(0, gl.LINEAR);
+        const atlasTex = makeTex(1, gl.NEAREST);
+        gl.uniform1i(u.video, 0);
+        gl.uniform1i(u.atlas, 1);
+        gl.uniform1f(u.glyphs, charset.length);
+        gl.uniform3fv(u.accent, hexToRgb(accent));
+
+        const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        gl.uniform1f(u.motion, reduceMotion ? 0 : 1);
+
+        // ---------- 尺寸 / atlas ----------
+        const fontFamily =
+            getComputedStyle(document.body).getPropertyValue("--font-geist-mono").trim() || "monospace";
+        let dpr = 1, cellW = 1, cellH = 1, cols = 1, rows = 1;
+
+        const updateCover = () => {
+            const vw = video.videoWidth, vh = video.videoHeight;
+            if (!vw || !vh) return gl.uniform4f(u.cover, 0, 0, 1, 1);
+            const a = (cols * cellW) / (rows * cellH);
+            const v = vw / vh;
+            if (a > v) {
+                const sy = v / a;
+                gl.uniform4f(u.cover, 0, (1 - sy) / 2, 1, sy);
+            } else {
+                const sx = a / v;
+                gl.uniform4f(u.cover, (1 - sx) / 2, 0, sx, 1);
+            }
+        };
+
+        const resize = () => {
+            dpr = Math.min(2, window.devicePixelRatio || 1);
+            const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
+            const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+            canvas.width = w;
+            canvas.height = h;
+            gl.viewport(0, 0, w, h);
+
+            cellW = Math.max(4, Math.round(cellSize * dpr));
+            cellH = Math.round(cellW * 1.6);
+            cols = Math.ceil(w / cellW);
+            rows = Math.ceil(h / cellH);
+
+            gl.activeTexture(gl.TEXTURE1);
+            gl.bindTexture(gl.TEXTURE_2D, atlasTex);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, buildAtlas(charset, cellW, cellH, fontFamily));
+
+            gl.uniform2f(u.res, w, h);
+            gl.uniform2f(u.cellSize, cellW, cellH);
+            gl.uniform2f(u.grid, cols, rows);
+            updateCover();
+        };
+
+        const ro = new ResizeObserver(resize);
+        ro.observe(canvas);
+        // 字体加载完后重建一次 atlas，避免用到回退字体
+        document.fonts?.ready.then(resize);
+
+        // ---------- 视频帧 ----------
+        let frameDirty = false;
+        let vfcHandle = 0;
+        const hasVFC = "requestVideoFrameCallback" in video;
+        const onVideoFrame = () => {
+            frameDirty = true;
+            vfcHandle = video.requestVideoFrameCallback(onVideoFrame);
+        };
+        if (hasVFC) vfcHandle = video.requestVideoFrameCallback(onVideoFrame);
+
+        const onMeta = () => updateCover();
+        video.addEventListener("loadedmetadata", onMeta);
+        video.play().catch(() => { /* 自动播放被拦截时，首次交互再播放 */ });
+
+        // 标签页隐藏时暂停视频，省电
+        const onVis = () => {
+            if (document.hidden) video.pause();
+            else video.play().catch(() => {});
+        };
+        document.addEventListener("visibilitychange", onVis);
+
+        // ---------- 交互 ----------
+        const mouse = {x: -9999, y: -9999, target: 0, strength: 0};
+        // 环形缓冲：每次点击占一个槽位，最多同时存在 MAX_RIPPLES 个水波
+        const ripples = new Float32Array(MAX_RIPPLES * 3).fill(-1000);
+        let rippleIdx = 0;
+        const onMove = (e: PointerEvent) => {
+            mouse.x = e.clientX * dpr;
+            mouse.y = e.clientY * dpr;
+            mouse.target = 1;
+        };
+        const onLeave = () => { mouse.target = 0; };
+        const onDown = (e: PointerEvent) => {
+            const k = rippleIdx * 3;
+            ripples[k] = e.clientX * dpr;
+            ripples[k + 1] = e.clientY * dpr;
+            ripples[k + 2] = now();
+            rippleIdx = (rippleIdx + 1) % MAX_RIPPLES;
+            if (video.paused) video.play().catch(() => {});
+        };
+        window.addEventListener("pointermove", onMove, {passive: true});
+        window.addEventListener("pointerdown", onDown, {passive: true});
+        document.documentElement.addEventListener("pointerleave", onLeave);
+
+        // ---------- 渲染循环 ----------
+        const start = performance.now();
+        const now = () => (performance.now() - start) / 1000;
+        let reveal = 0; // 入场扫描是一次性的，减少动态效果时也保留；只关闭持续闪烁
+        let last = 0;
+        let raf = 0;
+        const minDt = 1000 / maxFps;
+
+        const loop = (ts: number) => {
+            raf = requestAnimationFrame(loop);
+            if (ts - last < minDt - 1) return;
+            const dt = Math.min(0.1, (ts - last) / 1000);
+            last = ts;
+
+            if (revealedRef.current && reveal < 1) reveal = Math.min(1, reveal + dt / revealDuration);
+            const eased = 1 - Math.pow(1 - reveal, 3);
+
+            mouse.strength += (mouse.target - mouse.strength) * Math.min(1, dt * 6);
+
+            if (video.readyState >= 2 && (frameDirty || !hasVFC)) {
+                frameDirty = false;
+                gl.activeTexture(gl.TEXTURE0);
+                gl.bindTexture(gl.TEXTURE_2D, videoTex);
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, video);
+            }
+
+            gl.uniform1f(u.time, now());
+            gl.uniform1f(u.reveal, eased);
+            gl.uniform4f(u.mouse, mouse.x, mouse.y, 170 * dpr, mouse.strength);
+            gl.uniform3fv(u.ripples, ripples);
+            gl.drawArrays(gl.TRIANGLES, 0, 3);
+        };
+        raf = requestAnimationFrame(loop);
+
+        return () => {
+            cancelAnimationFrame(raf);
+            if (hasVFC) video.cancelVideoFrameCallback(vfcHandle);
+            ro.disconnect();
+            video.removeEventListener("loadedmetadata", onMeta);
+            document.removeEventListener("visibilitychange", onVis);
+            window.removeEventListener("pointermove", onMove);
+            window.removeEventListener("pointerdown", onDown);
+            document.documentElement.removeEventListener("pointerleave", onLeave);
+            gl.deleteTexture(videoTex);
+            gl.deleteTexture(atlasTex);
+            gl.deleteBuffer(buf);
+            gl.deleteProgram(prog);
+        };
+    }, [src, cellSize, charset, accent, maxFps, revealDuration]);
+
+    return (
+        <div className={className} style={{background: "#000", ...style}} aria-hidden="true">
+            <video
+                ref={videoRef}
+                src={src}
+                muted
+                loop
+                playsInline
+                autoPlay
+                preload="auto"
+                crossOrigin="anonymous"
+                style={fallback
+                    ? {width: "100%", height: "100%", objectFit: "cover", opacity: revealed ? 0.35 : 0, transition: "opacity 1s"}
+                    : {display: "none"}}
+            />
+            {!fallback && <canvas ref={canvasRef} style={{display: "block", width: "100%", height: "100%"}}/>}
+        </div>
+    );
+}

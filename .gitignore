@@ -39,3 +39,14 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# cloudflare
+.wrangler/
+
+# 原始视频备份（不部署、不提交）
+/1.original.mp4
+
+# IDE / 本地打包产物
+.idea/
+/out.zip
+/out.7z

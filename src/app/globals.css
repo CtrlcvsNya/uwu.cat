@@ -1,20 +1,16 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #000000;
+  --foreground: #ffffff;
+  --accent: #ceff1c;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-accent: var(--accent);
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 }
 
 @font-face {
@@ -22,14 +18,28 @@
   src: url("/fonts/font.woff2") format("woff2");
   font-weight: normal;
   font-style: normal;
+  font-display: swap;
 }
 
+html,
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: "MyFont", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-html {
-  font-family: "MyFont", sans-serif;
+/* 胶片颗粒：静态 SVG 噪点，几乎没有性能开销 */
+.grain {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.55 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  background-size: 160px 160px;
+}
+
+/* 标题字：上亮下暗的金属渐变 */
+.title-ink {
+  background: linear-gradient(180deg, #ffffff 0%, #f4f4f4 45%, #a8a8a8 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }

@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Next.js 静态导出 (out/) 作为 Worker 静态资源托管
+  "name": "uwu-cat",
+  "compatibility_date": "2026-11-01",
+  // 只负责给 /media/ 下的视频补 Range(206) 支持，其余请求不经过脚本
+  "main": "worker/index.ts",
+  "assets": {
+    "directory": "./out",
+    "binding": "ASSETS",
+    "not_found_handling": "404-page",
+    "run_worker_first": ["/media/*"]
+  },
+  // 绑定自定义域名（自动创建 DNS 记录和证书）
+  "routes": [
+    { "pattern": "uwu.cat", "custom_domain": true }
+  ]
+}

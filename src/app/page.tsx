@@ -1,295 +1,272 @@
 "use client";
-import {motion, AnimatePresence, LayoutGroup} from "framer-motion";
-import {useEffect, useMemo, useState} from "react";
-import AsciiCanvas256 from "@/app/video";
+import {motion, LayoutGroup, type Transition} from "motion/react";
+import {useEffect, useState} from "react";
+import AsciiVideo from "@/app/components/AsciiVideo";
 
 const sentence = "Uplift With Uniqueness . Cats Always Touch";
 const words = sentence.split(" ");
 
-// 基础节奏
-const IN_DUR = 0.6;         // 每词入场时长
-const STAGGER_IN = 0.1;     // 入场错峰
-const HOLD = 1.8;           // 全部入场后停留
-const OUT_PER = 0.05;       // 非首字母淡出：每词 0.05s
-const OUT_STAGGER = 0.05;   // 非首字母淡出错峰
-const IN_Y = 20;
-const OUT_Y = -IN_Y * 0.5;
+// ---------------- 缓动 ----------------
+const EASE_OUT = [0.16, 1, 0.3, 1] as const;      // easeOutQuint：入场
+const EASE_IN_OUT = [0.76, 0, 0.24, 1] as const;  // easeInOutQuart：变形/位移
 
-const INITIALS_HOLD = 1.2;  // 首字母聚合后停留
-const INITIALS_EXIT = 0.04;
-const EASE_OUT = [0.16, 1, 0.3, 1] as const; // easeOutQuint 风格
-const EASE_IN = [0.5, 0, 0.7, 0] as const;
+// ---------------- 节奏（秒） ----------------
+const IN_DUR = 0.9;          // 每词入场时长
+const IN_STAGGER = 0.08;     // 入场错峰
+const HOLD = 1.5;            // 整句停留
+const COLLAPSE_DUR = 0.75;   // 非首字母收拢
+const COLLAPSE_STAGGER = 0.035;
+const GROW_DUR = 0.9;        // UWU.CAT 放大
+const TITLE_HOLD = 0.45;     // 大标题停留后飞入方框
+const FLY_DUR = 1.05;        // 大标题 → 方框内小标题
 
-const ASCII_FADE_DELAY_AFTER_BLOCK = 0.4; // 进入 block 阶段后再等 0.4s 开始淡出
-const ASCII_FADE_DUR = 0.6;               // 淡出用时 0.6s
+const TOTAL_IN = (words.length - 1) * IN_STAGGER + IN_DUR;
+const TOTAL_COLLAPSE = (words.length - 1) * COLLAPSE_STAGGER + COLLAPSE_DUR;
 
-type Phase = "in" | "hold" | "outRest" | "initials" | "revealBlock" | "block";
+type Phase = "in" | "collapse" | "title" | "block";
 
-// 按词拆“首字母/其余”
+const TIMELINE: [Phase, number][] = [
+    ["collapse", TOTAL_IN + HOLD],
+    ["title", TOTAL_IN + HOLD + TOTAL_COLLAPSE - 0.2],
+    ["block", TOTAL_IN + HOLD + TOTAL_COLLAPSE - 0.2 + GROW_DUR + TITLE_HOLD],
+];
+
+// 按词拆“首字母/其余”，首字母连起来正好是 UWU.CAT
 type Split = { pre: string; first: string; post: string };
 const splitWord = (w: string): Split => {
     const m = w.match(/[A-Za-z0-9]/);
-    if (!m) return {pre: "", first: w.charAt(0) ?? "", post: w.slice(1)};
+    if (!m) return {pre: "", first: w.charAt(0), post: w.slice(1)};
     const i = m.index ?? 0;
     return {pre: w.slice(0, i), first: w[i], post: w.slice(i + 1)};
 };
-const splits: Split[] = words.map(splitWord);
+const splits = words.map(splitWord);
 
-// 逐词入场
-const wordVariant = {
-    hidden: {y: IN_Y, opacity: 0}, visible: {
-        y: 0, opacity: 1, transition: {duration: IN_DUR, ease: EASE_OUT},
-    },
-};
+const LINKS = [
+    {label: "X", href: "https://x.com/DaHuangCore"},
+    {label: "Github", href: "https://github.com/CtrlcvsNya"},
+];
 
-// 标题字符
-const title = "UWU.CAT";
-const titleChars = title.split("");
+const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
+
+/** 内容块里各元素的统一入场：上浮 + 去模糊 */
+const fadeUp = (delay: number) => ({
+    initial: {opacity: 0, y: 8, filter: "blur(6px)"},
+    animate: {opacity: 1, y: 0, filter: "blur(0px)"},
+    transition: {duration: 0.7, ease: EASE_OUT, delay} satisfies Transition,
+});
+
+// ---------------- 小组件 ----------------
+
+/** 非首字母部分：宽度收为 0，首字母自然向中间滑拢 */
+function Rest({text, idx, collapsed}: { text: string; idx: number; collapsed: boolean }) {
+    if (!text) return null;
+    return (
+        <motion.span
+            className="inline-block overflow-hidden whitespace-nowrap align-bottom title-ink"
+            initial={{opacity: 0, y: 24, filter: "blur(10px)"}}
+            animate={collapsed
+                ? {opacity: 0, y: -6, filter: "blur(6px)", width: 0}
+                : {opacity: 1, y: 0, filter: "blur(0px)", width: "auto"}}
+            transition={collapsed
+                ? {duration: COLLAPSE_DUR, ease: EASE_IN_OUT, delay: idx * COLLAPSE_STAGGER}
+                : {duration: IN_DUR, ease: EASE_OUT, delay: idx * IN_STAGGER}}
+        >
+            {text}
+        </motion.span>
+    );
+}
+
+const Logo = () => (
+    <svg viewBox="0 0 123 123" aria-hidden="true" fill="currentColor"
+         className="w-8 h-8 md:w-10 md:h-10 text-accent drop-shadow-[0_0_12px_rgba(206,255,28,0.45)]">
+        <polygon
+            points="91.08,49.15 122.88,49.15 122.88,73.73 91.08,73.73 113.58,96.23 96.15,113.58 73.73,91.08 73.73,122.88 49.15,122.88 49.15,91.08 26.64,113.58 9.3,96.23 31.72,73.73 0,73.73 0,49.15 31.72,49.15 9.3,26.73 26.64,9.3 49.15,31.72 49.15,0 73.73,0 73.73,31.72 96.24,9.3 113.58,26.64 91.08,49.15"/>
+    </svg>
+);
+
+const ArrowIcon = () => (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"
+         className="w-3 h-3 transition-transform duration-300 group-hover:translate-x-0.5 group-hover:-translate-y-0.5">
+        <path d="M7 17L17 7M17 7H7M17 7V17" stroke="currentColor" strokeWidth={3}/>
+    </svg>
+);
+
+/** 方框四角的强调色角标 */
+const CORNERS = [
+    {cls: "-top-1 -left-1 border-t border-l", from: {x: 8, y: 8}},
+    {cls: "-top-1 -right-1 border-t border-r", from: {x: -8, y: 8}},
+    {cls: "-bottom-1 -left-1 border-b border-l", from: {x: 8, y: -8}},
+    {cls: "-bottom-1 -right-1 border-b border-r", from: {x: -8, y: -8}},
+];
+
+// ---------------- 页面 ----------------
 
 export default function Home() {
-    const totalIn = useMemo(() => (words.length - 1) * STAGGER_IN + IN_DUR, []);
-    const totalOut = useMemo(() => (words.length - 1) * OUT_STAGGER + OUT_PER, []);
-
-    const [asciiVisible, setAsciiVisible] = useState(true);
-
     const [phase, setPhase] = useState<Phase>("in");
+    const [sizes, setSizes] = useState<{ small: number; big: number } | null>(null);
 
     useEffect(() => {
-        const t1 = setTimeout(() => setPhase("hold"), totalIn * 1000);
-        const t2 = setTimeout(() => setPhase("outRest"), (totalIn + HOLD) * 1000);
-        const t3 = setTimeout(() => setPhase("initials"), (totalIn + HOLD + totalOut) * 1000);
-        const t4 = setTimeout(() => setPhase("revealBlock"), (totalIn + HOLD + totalOut + INITIALS_HOLD) * 1000);
-        const t5 = setTimeout(() => setPhase("block"), (totalIn + HOLD + totalOut + INITIALS_HOLD + INITIALS_EXIT) * 1000);
-        const t6 = setTimeout(() => setAsciiVisible(false), (totalIn + HOLD + totalOut + INITIALS_HOLD + INITIALS_EXIT + ASCII_FADE_DELAY_AFTER_BLOCK) * 1000);
-        return () => { /* 清理原有 timer */
-            clearTimeout(t6);
-        };
-    }, [totalIn, totalOut]);
-    return (<div
-        className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-        <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start w-full">
-            <AnimatePresence>
-                {!asciiVisible && (<motion.div
-                    className="absolute inset-0 flex items-center justify-center overflow-hidden pointer-events-none z-0"
-                    initial={{opacity: 1}}
-                    animate={{opacity: 1}}
-                    exit={{opacity: 0}}
-                    transition={{duration: ASCII_FADE_DUR, ease: [0.16, 1, 0.3, 1]}}
-                >
-                    <AsciiCanvas256
-                        src="/1.mp4"
-                        overlay
-                        autoPlay
-                        loop
-                        muted
-                        fps={30}
-                        palette="xterm256"
-                        cellBg
-                        cellBgAlpha={0.85}
-                    />
-                </motion.div>)}
-            </AnimatePresence>
-            <LayoutGroup>
-                <div className="relative w-full flex justify-center items-center">
-                    {/* 阶段1/2/3：逐词入场 → 停留 → 非首字母按词淡出 */}
-                    <AnimatePresence>
-                        {(phase === "in" || phase === "hold" || phase === "outRest") && (<motion.div
-                            key="sentence"
-                            className="flex flex-wrap justify-center gap-[0.4rem] text-2xl md:text-3xl font-bold"
-                        >
-                            {splits.map(({pre, first, post}, idx) => {
-                                const inDelay = idx * STAGGER_IN;
-                                const outDelay = idx * OUT_STAGGER;
-                                return (<span key={idx} className="inline-flex items-baseline">
-                        {/* pre */}
-                                    <motion.span
-                                        initial={{ y: IN_Y, opacity: 0 }}
-                                        animate={phase === "outRest"
-                                            ? { y: OUT_Y, opacity: 0 }
-                                            : { y: 0, opacity: 1 }}
-                                        transition={phase === "outRest"
-                                            ? { duration: OUT_PER, delay: outDelay, ease: EASE_IN }
-                                            : { duration: IN_DUR, delay: inDelay, ease: EASE_OUT }}
-                                    >
-  {pre}
-</motion.span>
+        const w = window.innerWidth;
+        setSizes({
+            small: clamp((w - 64) / 24, 20, 40),   // 整句字号：桌面上一行放得下
+            big: clamp((w - 48) / 5.2, 40, 120),   // UWU.CAT 大标题字号
+        });
+        const timers = TIMELINE.map(([p, t]) => setTimeout(() => setPhase(p), t * 1000));
+        return () => timers.forEach(clearTimeout);
+    }, []);
 
-                                    {/* 首字母（保留，为后续“桥接”做准备） */}
-                                    <motion.span
-                                        layoutId={`initial-${idx}`}
-                                        initial={{y: IN_Y, opacity: 0}}
-                                        animate={{y: 0, opacity: 1}}
-                                        transition={{
-                                            duration: IN_DUR, delay: inDelay, ease: EASE_OUT,
-                                        }}
-                                    >
-                          {first}
-                        </motion.span>
+    const collapsed = phase !== "in";
 
-                                    {/* post */}
-                                    <motion.span
-                                        initial={{ y: IN_Y, opacity: 0 }}
-                                        animate={phase === "outRest"
-                                            ? { y: OUT_Y, opacity: 0 }
-                                            : { y: 0, opacity: 1 }}
-                                        transition={phase === "outRest"
-                                            ? { duration: OUT_PER, delay: outDelay, ease: EASE_IN }
-                                            : { duration: IN_DUR, delay: inDelay, ease: EASE_OUT }}
-                                    >
-  {post}
-</motion.span>
-                      </span>);
-                            })}
-                        </motion.div>)}
-                    </AnimatePresence>
+    return (
+        <div className="relative min-h-screen overflow-hidden select-none">
+            {/* 背景：字符视频，方框出现时开始“解码”扫描入场 */}
+            <AsciiVideo src="/media/bg-480p.mp4" revealed={phase === "block"} className="fixed inset-0 z-0"/>
+            {/* 中心压暗，保证文字可读 */}
+            <div className="pointer-events-none fixed inset-0 z-0 bg-[radial-gradient(ellipse_at_center,rgba(0,0,0,0.6)_0%,rgba(0,0,0,0)_60%)]"/>
+            {/* 全屏胶片颗粒 */}
+            <div className="grain pointer-events-none fixed inset-0 z-30 opacity-[0.06] mix-blend-overlay"/>
 
-                    {/* 阶段4/5：首字母聚合 → 向左“收拢+模糊+淡出”，同时内容块出现 */}
-                    {/* 阶段4：首字母聚合（绝对定位到中心，便于与内容块叠加过渡） */}
-                    {(phase === "initials" || phase === "revealBlock") && (<motion.div
-                        className="absolute inset-0 flex items-center justify-center pointer-events-none"
-                        initial={{opacity: 0}}
-                        animate={phase === "initials" ? {opacity: 1, x: 0} : {opacity: 0, x: -60} // 向左淡出
-                        }
-                        transition={{
-                            duration: phase === "initials" ? 0.25 : INITIALS_EXIT, ease: "easeOut",
-                        }}
-                    >
-                        <div className="flex justify-center items-center text-2xl md:text-3xl font-bold">
-                            {splits.map(({first}, idx) => (<motion.span
-                                key={idx}
-                                layoutId={`initial-${idx}`}
-                                transition={{type: "spring", stiffness: 520, damping: 32}}
+            <main className="relative z-10 grid min-h-screen place-items-center p-6 sm:p-20">
+                {sizes && (
+                    <LayoutGroup>
+                        {phase !== "block" ? (
+                            /* 阶段 1~3：整句入场 → 非首字母收拢 → UWU.CAT 放大 */
+                            <div
+                                className="flex flex-wrap justify-center items-end font-bold"
+                                style={{
+                                    fontSize: phase === "title" ? sizes.big : sizes.small,
+                                    transition: `font-size ${GROW_DUR}s cubic-bezier(${EASE_IN_OUT.join(",")})`,
+                                }}
                             >
-                                {first}
-                            </motion.span>))}
-                        </div>
-                    </motion.div>)}
-
-                    {/* 阶段5/6：内容块（标题/Logo 慢一些、连贯一些；二级内容随后出现） */}
-                    {(phase === "revealBlock" || phase === "block") && (<motion.div
-                        className="flex flex-col md:flex-row md:items-start w-full md:w-[36em] gap-2 p-4 md:p-7 -mt-[2.35rem] ml-[0.5rem] z-10 bg-black rounded-lg shadow-lg"
-                        initial={{opacity: 0}}
-                        animate={{opacity: 1}}
-                        transition={{duration: 0.2, ease: EASE_OUT}}
-                    >
-                        {/* 左：Logo + 标题 */}
-                        <div className="flex flex-col">
-                            <div className="flex items-center">
-                                {/* Logo：从右侧滑入 + 旋转放大（更慢） */}
+                                {splits.map(({pre, first, post}, idx) => (
+                                    <span key={idx} className="inline-flex items-end leading-[1.25]">
+                                        {idx > 0 && (
+                                            <motion.span
+                                                className="inline-block"
+                                                initial={{width: "0.3em"}}
+                                                animate={{width: collapsed ? "0em" : "0.3em"}}
+                                                transition={{duration: COLLAPSE_DUR, ease: EASE_IN_OUT, delay: idx * COLLAPSE_STAGGER}}
+                                            />
+                                        )}
+                                        <Rest text={pre} idx={idx} collapsed={collapsed}/>
+                                        <motion.span
+                                            layoutId={`initial-${idx}`}
+                                            className="inline-block title-ink"
+                                            initial={{opacity: 0, y: 24, filter: "blur(10px)"}}
+                                            animate={{opacity: 1, y: 0, filter: "blur(0px)"}}
+                                            transition={{duration: IN_DUR, ease: EASE_OUT, delay: idx * IN_STAGGER}}
+                                        >
+                                            {first}
+                                        </motion.span>
+                                        <Rest text={post} idx={idx} collapsed={collapsed}/>
+                                    </span>
+                                ))}
+                            </div>
+                        ) : (
+                            /* 阶段 4：方框展开，大标题飞入成为小标题 */
+                            <div className="relative w-full max-w-[40rem]">
+                                {/* 玻璃底板：先横向展开成一条线，再纵向打开 */}
                                 <motion.div
-                                    initial={{x: 36, opacity: 0, scale: 0.8, rotate: -90}}
-                                    animate={{x: 0, opacity: 1, scale: 1, rotate: 270}}
-                                    transition={{
-                                        x: {duration: 0.35, ease: EASE_OUT},
-                                        opacity: {duration: 0.35, ease: EASE_OUT},
-                                        scale: {duration: 0.45, ease: EASE_OUT},
-                                        rotate: {duration: 0.6, ease: "easeInOut"},
-                                    }}
-                                    style={{transformOrigin: "50% 50%"}}
+                                    className="absolute inset-0 overflow-hidden bg-black/70 backdrop-blur-xl ring-1 ring-white/10 shadow-[0_40px_120px_-30px_rgba(0,0,0,0.95)]"
+                                    initial={{clipPath: "inset(50% 50% 50% 50%)"}}
+                                    animate={{clipPath: ["inset(50% 50% 50% 50%)", "inset(50% 0% 50% 0%)", "inset(0% 0% 0% 0%)"]}}
+                                    transition={{duration: 1.0, times: [0, 0.45, 1], ease: EASE_IN_OUT, delay: 0.1}}
                                 >
-                                    <motion.svg
-                                        viewBox="0 0 123 123"
-                                        aria-hidden="true"
-                                        fill="currentColor"
-                                        className="w-8 h-8 md:w-10 md:h-10 -mt-1 md:-mt-1.5 text-[#ceff1c]"
-                                        stroke="none"
-                                    >
-                                        <g>
-                                            <polygon className="st0"
-                                                     points="91.08,49.15 122.88,49.15 122.88,73.73 91.08,73.73 113.58,96.23 96.15,113.58 73.73,91.08 73.73,122.88 49.15,122.88 49.15,91.08 26.64,113.58 9.3,96.23 31.72,73.73 0,73.73 0,49.15 31.72,49.15 9.3,26.73 26.64,9.3 49.15,31.72 49.15,0 73.73,0 73.73,31.72 96.24,9.3 113.58,26.64 91.08,49.15"></polygon>
-                                        </g>
-                                    </motion.svg>
+                                    <div className="grain absolute inset-0 opacity-[0.08] mix-blend-overlay"/>
+                                    <div className="absolute inset-0 bg-[radial-gradient(120%_80%_at_0%_0%,rgba(206,255,28,0.08),transparent_55%)]"/>
+                                    <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/40 to-transparent"/>
+                                    <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent"/>
+                                    {/* 一次性的光泽扫过 */}
+                                    <motion.div
+                                        className="absolute inset-y-0 w-1/3 -skew-x-12 bg-gradient-to-r from-transparent via-white/[0.08] to-transparent"
+                                        initial={{left: "-40%"}}
+                                        animate={{left: "140%"}}
+                                        transition={{duration: 1.3, ease: EASE_IN_OUT, delay: 1.0}}
+                                    />
                                 </motion.div>
 
-                                {/* 标题：字符逐个从右向左进入，整体 letter-spacing 收拢，营造“首字母聚合→标题成形”的连贯感 */}
-                                <motion.span
-                                    className="text-2xl md:text-3xl font-bold ml-1"
-                                    initial={{letterSpacing: "0.35em"}}
-                                    animate={{letterSpacing: "0.02em"}}
-                                    transition={{duration: 0.4, ease: EASE_OUT}}
-                                    style={{display: "inline-flex"}}
-                                >
-                                    {titleChars.map((ch, i) => (<motion.span
+                                {CORNERS.map(({cls, from}, i) => (
+                                    <motion.span
                                         key={i}
-                                        initial={{x: 28, opacity: 0}}
-                                        animate={{x: 0, opacity: 1}}
-                                        transition={{
-                                            duration: 0.34, ease: EASE_OUT, delay: 0.12 + i * 0.06
-                                        }}
-                                        style={{display: "inline-block"}}
-                                    >
-                                        {ch}
-                                    </motion.span>))}
-                                </motion.span>
+                                        className={`absolute size-3 border-accent ${cls}`}
+                                        initial={{opacity: 0, ...from}}
+                                        animate={{opacity: 1, x: 0, y: 0}}
+                                        transition={{duration: 0.6, ease: EASE_OUT, delay: 0.9}}
+                                    />
+                                ))}
+
+                                <div className="relative flex flex-col md:flex-row gap-6 md:gap-8 p-6 md:p-8">
+                                    {/* 左：Logo + 标题 + 副标题 */}
+                                    <div className="flex flex-col flex-1">
+                                        <div className="flex items-center gap-2">
+                                            <motion.div
+                                                initial={{opacity: 0, scale: 0.4, rotate: -180}}
+                                                animate={{opacity: 1, scale: 1, rotate: 0}}
+                                                transition={{type: "spring", stiffness: 140, damping: 16, delay: 0.85}}
+                                                whileHover={{rotate: 90}}
+                                            >
+                                                <Logo/>
+                                            </motion.div>
+                                            <span className="inline-flex text-3xl md:text-4xl font-bold leading-[1.25] tracking-[0.02em]">
+                                                {splits.map(({first}, idx) => (
+                                                    <motion.span
+                                                        key={idx}
+                                                        layoutId={`initial-${idx}`}
+                                                        className="inline-block title-ink"
+                                                        transition={{layout: {duration: FLY_DUR, ease: EASE_IN_OUT}}}
+                                                    >
+                                                        {first}
+                                                    </motion.span>
+                                                ))}
+                                            </span>
+                                        </div>
+                                        <motion.p
+                                            className="mt-2 pl-10 md:pl-12 font-mono text-[11px] leading-relaxed tracking-wide text-white/50"
+                                            {...fadeUp(1.0)}
+                                        >
+                                            In a cat’s eyes, all things belong to dreams.
+                                        </motion.p>
+                                    </div>
+
+                                    {/* 分隔线 */}
+                                    <motion.div
+                                        className="hidden md:block w-px self-stretch origin-top bg-gradient-to-b from-transparent via-white/20 to-transparent"
+                                        initial={{scaleY: 0}}
+                                        animate={{scaleY: 1}}
+                                        transition={{duration: 0.8, ease: EASE_IN_OUT, delay: 0.95}}
+                                    />
+
+                                    {/* 右：链接 / 版权 */}
+                                    <div className="flex flex-col md:items-end gap-1.5 md:min-w-[9rem]">
+                                        {LINKS.map(({label, href}, i) => (
+                                            <motion.a
+                                                key={label}
+                                                href={href}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                className="group relative inline-flex items-center gap-1.5 self-start md:self-end font-mono text-xs uppercase tracking-[0.18em] text-white/85 transition-colors hover:text-accent after:absolute after:left-0 after:-bottom-0.5 after:h-px after:w-full after:origin-right after:scale-x-0 after:bg-accent after:transition-transform after:duration-300 hover:after:origin-left hover:after:scale-x-100"
+                                                {...fadeUp(1.1 + i * 0.08)}
+                                            >
+                                                {label}
+                                                <ArrowIcon/>
+                                            </motion.a>
+                                        ))}
+                                        <div className="flex-1 min-h-3"/>
+                                        <motion.p
+                                            className="font-mono text-[10px] uppercase leading-relaxed tracking-[0.16em] text-white/35 md:text-right"
+                                            {...fadeUp(1.3)}
+                                        >
+                                            © Ctrlcvs
+                                            <br/>
+                                            not for sale, AI last.
+                                        </motion.p>
+                                    </div>
+                                </div>
                             </div>
-
-                            {/* 副标题：稍慢的放大显现 */}
-                            <motion.div
-                                className="text-xs text-gray-400 mt-1 ml-9 md:ml-11 font-bold"
-                                initial={{scale: 0.92, opacity: 0}}
-                                animate={{scale: 1, opacity: 1}}
-                                transition={{duration: 0.24, ease: EASE_OUT, delay: 0.28}}
-                            >
-                                In a cat’s eyes, all things belong to dreams.
-                            </motion.div>
-                        </div>
-
-                        <div className="hidden md:block md:w-1/3"></div>
-
-                        {/* 右侧：链接/版权，稍后一点出现 */}
-                        <motion.div
-                            className="flex flex-col text-sm font-bold w-full mt-4 md:mt-0 md:items-end h-auto md:h-24"
-                            initial={{scale: 0.92, opacity: 0}}
-                            animate={{scale: 1, opacity: 1}}
-                            transition={{duration: 0.26, ease: EASE_OUT, delay: 0.32}}
-                        >
-                            <a href="https://x.com/DaHuangCore"
-                               className="flex items-center gap-2 my-1 md:my-0">
-                    <span className="inline-block whitespace-pre-wrap">
-                      <span className="sr-only">X</span>
-                      <span aria-hidden="true">X</span>
-                    </span>
-                                <svg
-                                    width="62"
-                                    height="62"
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    xmlns="http://www.w3.org/2000/svg"
-                                    className="w-3 h-3 md:w-4 md:h-4"
-                                >
-                                    <path d="M7 17L17 7M17 7H7M17 7V17" stroke="currentColor"
-                                          strokeWidth={4}></path>
-                                </svg>
-                            </a>
-                            <a href="https://github.com/CtrlcvsNya"
-                               className="flex items-center gap-2 my-1 md:my-0">
-                    <span className="inline-block whitespace-pre-wrap">
-                      <span className="sr-only">Github</span>
-                      <span aria-hidden="true">Github</span>
-                    </span>
-                                <svg
-                                    width="62"
-                                    height="62"
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    xmlns="http://www.w3.org/2000/svg"
-                                    className="w-3 h-3 md:w-4 md:h-4"
-                                >
-                                    <path d="M7 17L17 7M17 7H7M17 7V17" stroke="currentColor"
-                                          strokeWidth={4}></path>
-                                </svg>
-                            </a>
-
-                            <div className="flex-1"></div>
-                            <p className="text-xs text-gray-400 mt-3 md:mt-0 md:text-right">
-                                © Ctrlcvs
-                                <br/>
-                                not for sale, AI last.
-                            </p>
-                        </motion.div>
-                    </motion.div>)}
-                </div>
-            </LayoutGroup>
-        </main>
-    </div>);
+                        )}
+                    </LayoutGroup>
+                )}
+            </main>
+        </div>
+    );
 }
