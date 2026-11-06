@@ -23,6 +23,9 @@
 
 html,
 body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none; /* 手机上禁止整页滚动 / 回弹 */
   background: var(--background);
   color: var(--foreground);
   font-family: "MyFont", sans-serif;
@@ -42,4 +45,33 @@ body {
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+}
+
+/* CRT 横向扫描线：每 3px 一条，和 WebGL 背景里的扫描线对齐 */
+.scanlines {
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.025) 0px,
+    rgba(255, 255, 255, 0.025) 1px,
+    transparent 1px,
+    transparent 2px,
+    rgba(0, 0, 0, 0.28) 2px,
+    rgba(0, 0, 0, 0.28) 3px
+  );
+}
+
+/* 刷新亮带：从上往下慢慢扫过 */
+.crt-roll {
+  background: linear-gradient(to bottom, transparent, rgba(255, 255, 255, 0.035) 50%, transparent);
+  mix-blend-mode: screen;
+  animation: crt-roll 7s linear infinite;
+}
+
+@keyframes crt-roll {
+  from { transform: translateY(-100%); }
+  to   { transform: translateY(100vh); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .crt-roll { display: none; }
 }

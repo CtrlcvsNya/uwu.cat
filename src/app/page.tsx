@@ -118,15 +118,18 @@ export default function Home() {
     const collapsed = phase !== "in";
 
     return (
-        <div className="relative min-h-screen overflow-hidden select-none">
+        <div className="fixed inset-0 overflow-hidden overscroll-none touch-none select-none">
             {/* 背景：字符视频，方框出现时开始“解码”扫描入场 */}
             <AsciiVideo src="/media/bg-480p.mp4" revealed={phase === "block"} className="fixed inset-0 z-0"/>
             {/* 中心压暗，保证文字可读 */}
             <div className="pointer-events-none fixed inset-0 z-0 bg-[radial-gradient(ellipse_at_center,rgba(0,0,0,0.6)_0%,rgba(0,0,0,0)_60%)]"/>
+            {/* CRT 扫描线 + 缓慢滚动的刷新亮带：盖在整页（包括方框）上 */}
+            <div className="scanlines pointer-events-none fixed inset-0 z-20"/>
+            <div className="crt-roll pointer-events-none fixed inset-x-0 top-0 z-20 h-[18vh]"/>
             {/* 全屏胶片颗粒 */}
             <div className="grain pointer-events-none fixed inset-0 z-30 opacity-[0.06] mix-blend-overlay"/>
 
-            <main className="relative z-10 grid min-h-screen place-items-center p-6 sm:p-20">
+            <main className="relative z-10 grid h-full place-items-center p-6 sm:p-20">
                 {sizes && (
                     <LayoutGroup>
                         {phase !== "block" ? (

@@ -63,6 +63,8 @@ uniform vec3  uRipples[MAX_RIPPLES]; // 每个水波: x, y, 产生时间
 uniform float uReveal;     // 0..1 入场进度
 uniform float uMotion;     // 1 = 正常, 0 = 用户偏好减少动态效果
 uniform vec3  uAccent;
+uniform vec2  uCurve;      // 屏幕弧度；手机竖屏时为 0（平铺）
+uniform float uDpr;        // 设备像素比，用于让扫描线按 CSS 像素对齐
 
 float hash(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
@@ -85,9 +87,9 @@ void main() {
 
     // ---- CRT 屏幕弧度：桶形畸变，四角收成圆角 ----
     vec2 sq = screen / uRes * 2.0 - 1.0;
-    sq *= 1.0 + vec2(0.018, 0.028) * dot(sq, sq);
+    sq *= 1.0 + uCurve * dot(sq, sq);
     vec2 edge = smoothstep(vec2(0.0), vec2(0.004, 0.006), 1.0 - abs(sq));
-    float screenMask = edge.x * edge.y;
+    float screenMask = uCurve.x > 0.0 ? edge.x * edge.y : 1.0;
     if (screenMask <= 0.0 || uReveal <= 0.0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
     vec2 px = (sq * 0.5 + 0.5) * uRes;
 
@@ -182,7 +184,9 @@ void main() {
     rgb += haze * haze * 0.22;
 
     // ---- 扫描线 + 荧光粉 RGB 栅格 + 缓慢滚动的亮带 ----
-    float scan = 0.78 + 0.22 * cos(screen.y * 6.2832 / 3.0);
+    // 扫描线：每 3 个 CSS 像素一条，亮行中间饱满、行间是明显的暗缝（与页面上的 CSS 扫描线对齐）
+    float sp   = fract(screen.y / (3.0 * uDpr));
+    float scan = mix(0.42, 1.18, smoothstep(0.0, 0.3, sp) * smoothstep(1.0, 0.62, sp));
     float slot = mod(floor(screen.x), 3.0);
     vec3 mask = vec3(0.9) + 0.1 * vec3(slot == 0.0, slot == 1.0, slot == 2.0) * 2.0 - 0.067;
     float roll = 1.0 + 0.07 * uMotion * smoothstep(0.0, 0.15, 0.15 - abs(fract(screen.y / uRes.y - uTime * 0.07) - 0.5));
@@ -299,7 +303,7 @@ export default function AsciiVideo({
             video: U("uVideo"), atlas: U("uAtlas"), res: U("uRes"), cellSize: U("uCellSize"),
             grid: U("uGrid"), cover: U("uCover"), glyphs: U("uGlyphs"), time: U("uTime"),
             mouse: U("uMouse"), ripples: U("uRipples"), reveal: U("uReveal"), motion: U("uMotion"),
-            accent: U("uAccent"),
+            accent: U("uAccent"), curve: U("uCurve"), dpr: U("uDpr"),
         };
 
         const makeTex = (unit: number, filter: number) => {
@@ -363,6 +367,10 @@ export default function AsciiVideo({
             gl.uniform2f(u.res, w, h);
             gl.uniform2f(u.cellSize, cellW, cellH);
             gl.uniform2f(u.grid, cols, rows);
+            gl.uniform1f(u.dpr, dpr);
+            // 竖屏 / 窄屏（手机）上弧度会显得很怪，直接平铺
+            const flat = canvas.clientWidth < 768 || canvas.clientWidth < canvas.clientHeight;
+            gl.uniform2f(u.curve, flat ? 0 : 0.018, flat ? 0 : 0.028);
             updateCover();
         };
 
@@ -403,7 +411,10 @@ export default function AsciiVideo({
             mouse.target = 1;
         };
         const onLeave = () => { mouse.target = 0; };
+        // 触屏没有“悬停”：手指抬起后透镜淡出，而不是停在最后的位置
+        const onUp = (e: PointerEvent) => { if (e.pointerType !== "mouse") mouse.target = 0; };
         const onDown = (e: PointerEvent) => {
+            onMove(e);
             const k = rippleIdx * 3;
             ripples[k] = e.clientX * dpr;
             ripples[k + 1] = e.clientY * dpr;
@@ -413,6 +424,8 @@ export default function AsciiVideo({
         };
         window.addEventListener("pointermove", onMove, {passive: true});
         window.addEventListener("pointerdown", onDown, {passive: true});
+        window.addEventListener("pointerup", onUp, {passive: true});
+        window.addEventListener("pointercancel", onUp, {passive: true});
         document.documentElement.addEventListener("pointerleave", onLeave);
 
         // ---------- 渲染循环 ----------
@@ -457,6 +470,8 @@ export default function AsciiVideo({
             document.removeEventListener("visibilitychange", onVis);
             window.removeEventListener("pointermove", onMove);
             window.removeEventListener("pointerdown", onDown);
+            window.removeEventListener("pointerup", onUp);
+            window.removeEventListener("pointercancel", onUp);
             document.documentElement.removeEventListener("pointerleave", onLeave);
             gl.deleteTexture(videoTex);
             gl.deleteTexture(atlasTex);
