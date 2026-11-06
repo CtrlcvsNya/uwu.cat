@@ -29,11 +29,11 @@ npm run dev        # http://localhost:3000
 | `src/app/components/AsciiVideo.tsx` | WebGL ASCII / CRT renderer |
 | `worker/index.ts` | Adds HTTP Range (206) support for videos — required by Safari / iOS |
 | `scripts/media-sizes.mjs` | Records media file sizes for the worker at build time |
-| `.github/workflows/deploy.yml` | CI: build on PRs, deploy on `master` |
+| `.github/workflows/deploy.yml` | CI: build on PRs, deploy on `main` |
 
 ## Deployment
 
-Every push to `master` is built and deployed to Cloudflare Workers by GitHub Actions.
+Every push to `main` is built and deployed to Cloudflare Workers by GitHub Actions.
 To deploy your own fork, set two repository secrets:
 
 - `CLOUDFLARE_API_TOKEN` — an API token created from the **Edit Cloudflare Workers** template
