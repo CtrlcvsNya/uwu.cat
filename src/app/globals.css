@@ -21,6 +21,26 @@
   font-display: swap;
 }
 
+/* 开场多语言闪切用的字体（SIL OFL 1.1），只截取了开场那几句用到的字，每个只有几 KB */
+@font-face {
+  font-family: "IntroJA"; /* M PLUS 1p ExtraBold */
+  src: url("/fonts/intro-ja.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IntroZH"; /* Noto Sans SC Black */
+  src: url("/fonts/intro-zh.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IntroRU"; /* Tektur Bold */
+  src: url("/fonts/intro-ru.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+
 html,
 body {
   height: 100%;

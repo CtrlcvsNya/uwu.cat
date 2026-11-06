@@ -1,19 +1,55 @@
 "use client";
-import {motion, LayoutGroup, type Transition} from "motion/react";
+import {motion, AnimatePresence, LayoutGroup, useReducedMotion, type Transition} from "motion/react";
 import {useEffect, useState} from "react";
 import AsciiVideo from "@/app/components/AsciiVideo";
 
 const sentence = "Uplift With Uniqueness . Cats Always Touch";
 const words = sentence.split(" ");
 
+// 进入页面时先用其它语言把这句话快速“翻”一遍，最后落在英文上再继续
+// 自定义字体（Grotesk Remix）只有拉丁字符，日/中/俄用风格、字重相近的开源字体，
+// 只截取了这几句用到的字（public/fonts/intro-*.woff2，见 globals.css）。改文案时要重新截取：
+//   https://fonts.googleapis.com/css2?family=<字体>&text=<新文案>
+const LANGS = [
+    {
+        lang: "ja",
+        text: "個性が心を高める , 猫はいつも心に触れる",
+        font: '"IntroJA", "Hiragino Sans", "Yu Gothic", sans-serif',
+    },
+    {
+        lang: "zh-CN",
+        text: "以独特振奋人心 , 猫总能触动人心",
+        font: '"IntroZH", "PingFang SC", "Microsoft YaHei", sans-serif',
+    },
+    {
+        lang: "ru",
+        text: "Уникальность возвышает . Кошки всегда трогают",
+        font: '"IntroRU", "Segoe UI", Arial, sans-serif',
+    },
+    {
+        lang: "fr",
+        text: "L’unicité élève . Les chats touchent toujours",
+        font: '"MyFont", sans-serif',
+    },
+];
+
 // ---------------- 缓动 ----------------
 const EASE_OUT = [0.16, 1, 0.3, 1] as const;      // easeOutQuint：入场
 const EASE_IN_OUT = [0.76, 0, 0.24, 1] as const;  // easeInOutQuart：变形/位移
 
 // ---------------- 节奏（秒） ----------------
-const IN_DUR = 0.9;          // 每词入场时长
-const IN_STAGGER = 0.08;     // 入场错峰
-const HOLD = 1.5;            // 整句停留
+const LANG_FIRST = 0.8;      // 第一种语言多停一会儿，让视线先落定
+const LANG_STEP = 0.5;       // 之后每种语言停留（约 2 次/秒，够认出是哪种语言又不晃眼）
+const LANG_IN = 0.3;         // 切入：去模糊 + 轻微上浮
+const LANG_OUT = 0.2;        // 切出：比切入更快，两者交叠成“闪切”
+const LANG_TOTAL = LANG_FIRST + (LANGS.length - 1) * LANG_STEP; // 何时落到英文
+// 英文和前面几种语言用同一种“整句切入”，只是稍慢一点，读起来像落地而不是重新开始
+const IN_DUR = 0.45;         // 英文切入时长
+const IN_STAGGER = 0;        // 整句一起切入，不再逐词错峰
+// 整句停留。体感停留 ≈ 切入的后半段（easeOutQuint 前一半时间就走完 ~97%，约 0.2s 已清晰可读）
+// + HOLD + 收拢的起步段（easeInOutQuart 起步很慢，前 ~0.15s 几乎不动）。
+// 目标体感约 1s：是闪切节拍（0.5s）的两倍，读得出“落地了”，又不至于干等
+const HOLD = 0.7;
 const COLLAPSE_DUR = 0.75;   // 非首字母收拢
 const COLLAPSE_STAGGER = 0.035;
 const GROW_DUR = 0.9;        // UWU.CAT 放大
@@ -26,7 +62,7 @@ const FLY_DUR = 1.05;        // 大标题 → 方框内小标题
 const TOTAL_IN = (words.length - 1) * IN_STAGGER + IN_DUR;
 const TOTAL_COLLAPSE = (words.length - 1) * COLLAPSE_STAGGER + COLLAPSE_DUR;
 
-type Phase = "in" | "collapse" | "title" | "block";
+type Phase = "langs" | "in" | "collapse" | "title" | "block";
 
 const TIMELINE: [Phase, number][] = [
     ["collapse", TOTAL_IN + HOLD],
@@ -53,11 +89,13 @@ const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
 
 const TITLE = splits.map((s) => s.first).join(""); // "UWU.CAT"
 
-/** 用页面字体在 100px 下实际排一次，返回文字宽度 */
-function measureAt100(text: string) {
+/** 用页面字体（或指定字体）在 100px 下实际排一次，返回文字宽度 */
+function measureAt100(text: string, font?: string, lang?: string) {
     const el = document.createElement("span");
     el.textContent = text;
+    if (lang) el.lang = lang;
     el.style.cssText = "position:absolute;visibility:hidden;white-space:pre;font-size:100px;font-weight:700;";
+    if (font) el.style.fontFamily = font;
     document.body.appendChild(el);
     const width = el.getBoundingClientRect().width;
     el.remove();
@@ -71,15 +109,22 @@ const fadeUp = (delay: number) => ({
     transition: {duration: 0.7, ease: EASE_OUT, delay} satisfies Transition,
 });
 
+/**
+ * 开场每一句（各语言 + 英文）共用的切入/切出起止状态：轻微上浮 + 去模糊。
+ * 减少动态效果（如 Windows 关闭了“动画效果”）时只做淡入淡出，不位移、不模糊。
+ */
+const cutFrom = (reduce: boolean | null, y = 10) =>
+    reduce ? {opacity: 0} : {opacity: 0, y, filter: "blur(8px)"};
+
 // ---------------- 小组件 ----------------
 
 /** 非首字母部分：宽度收为 0，首字母自然向中间滑拢 */
-function Rest({text, idx, collapsed}: { text: string; idx: number; collapsed: boolean }) {
+function Rest({text, idx, collapsed, reduce}: { text: string; idx: number; collapsed: boolean; reduce: boolean | null }) {
     if (!text) return null;
     return (
         <motion.span
             className="inline-block overflow-hidden whitespace-nowrap align-bottom title-ink"
-            initial={{opacity: 0, y: 24, filter: "blur(10px)"}}
+            initial={cutFrom(reduce)}
             animate={collapsed
                 ? {opacity: 0, y: -6, filter: "blur(6px)", width: 0}
                 : {opacity: 1, y: 0, filter: "blur(0px)", width: "auto"}}
@@ -143,29 +188,41 @@ const CORNERS = [
 // ---------------- 页面 ----------------
 
 export default function Home() {
-    const [phase, setPhase] = useState<Phase>("in");
-    const [sizes, setSizes] = useState<{ small: number; big: number } | null>(null);
+    const [phase, setPhase] = useState<Phase>("langs");
+    const [langIdx, setLangIdx] = useState(0);
+    const [sizes, setSizes] = useState<{ small: number; big: number; langs: number[] } | null>(null);
 
     useEffect(() => {
         let cancelled = false;
-        let timers: ReturnType<typeof setTimeout>[] = [];
+        const timers: ReturnType<typeof setTimeout>[] = [];
 
         // 等字体加载完，按真实字宽算字号，保证整句和 UWU.CAT 在任何屏幕上都不换行
-        // 自定义字体是按需加载的，显式 load 一次再量，避免量到回退字体
+        // 自定义字体是按需加载的，显式 load 一次再量，避免量到回退字体（也避免闪切时字体中途替换）
         const fontsReady = document.fonts
-            ? document.fonts.load('700 100px "MyFont"', TITLE).then(() => document.fonts.ready)
+            ? Promise.all([
+                document.fonts.load('700 100px "MyFont"', TITLE),
+                ...LANGS.map(({font, text}) => document.fonts.load(`700 100px ${font}`, text)),
+            ]).then(() => document.fonts.ready)
             : Promise.resolve();
         fontsReady.catch(() => undefined).then(() => {
             if (cancelled) return;
             const w = window.innerWidth;
             const avail = w - (w >= 640 ? 160 : 32); // 减去 main 的左右 padding（p-4 / sm:p-20）
+            // 整句必须一行放下（换行会在收拢时跳行），手机上会比较小
+            const small = clamp((avail * 0.94) / (measureAt100(sentence) / 100), 11, 40);
             setSizes({
-                // 整句必须一行放下（换行会在收拢时跳行），手机上会比较小
-                small: clamp((avail * 0.94) / (measureAt100(sentence) / 100), 11, 40),
+                small,
                 // 手机上不撑满屏幕（太压迫），只占 65% 宽；桌面最大 120px
                 big: clamp((avail * (w < 640 ? 0.65 : 0.9)) / (measureAt100(TITLE) / 100), 32, 120),
+                // 其它语言和英文同字号，放不下一行时才缩小（闪切时不跳行）
+                langs: LANGS.map(({text, font, lang}) =>
+                    Math.min(small, (avail * 0.94) / (measureAt100(text, font, lang) / 100))),
             });
-            timers = TIMELINE.map(([p, t]) => setTimeout(() => setPhase(p), t * 1000));
+
+            timers.push(...LANGS.slice(1).map((_, i) =>
+                setTimeout(() => setLangIdx(i + 1), (LANG_FIRST + i * LANG_STEP) * 1000)));
+            timers.push(...([["in", 0], ...TIMELINE] as [Phase, number][]).map(([p, t]) =>
+                setTimeout(() => setPhase(p), (LANG_TOTAL + t) * 1000)));
         });
         return () => {
             cancelled = true;
@@ -173,7 +230,10 @@ export default function Home() {
         };
     }, []);
 
-    const collapsed = phase !== "in";
+    const collapsed = phase !== "langs" && phase !== "in";
+    const lang = LANGS[langIdx];
+    const reduce = useReducedMotion();
+    const cutTo = {opacity: 1, y: 0, filter: "blur(0px)"};
 
     return (
         <div className="fixed inset-0 overflow-hidden overscroll-none touch-none select-none">
@@ -188,7 +248,27 @@ export default function Home() {
             <div className="grain pointer-events-none fixed inset-0 z-30 opacity-[0.06] mix-blend-overlay"/>
 
             <main className="relative z-10 grid h-full place-items-center p-4 sm:p-20">
+                {/* 阶段 0：日 → 中 → 俄 → 法 闪切，同一位置交叠淡入淡出，最后一个和英文入场重叠 */}
                 {sizes && (
+                    <div className="pointer-events-none absolute inset-0 grid place-items-center p-4 sm:p-20" aria-hidden="true">
+                        <AnimatePresence>
+                            {phase === "langs" && (
+                                <motion.p
+                                    key={lang.lang}
+                                    lang={lang.lang}
+                                    className="[grid-area:1/1] whitespace-nowrap font-bold leading-[1.25] title-ink"
+                                    style={{fontSize: sizes.langs[langIdx], fontFamily: lang.font}}
+                                    initial={cutFrom(reduce)}
+                                    animate={{...cutTo, transition: {duration: LANG_IN, ease: EASE_OUT}}}
+                                    exit={{...cutFrom(reduce, -8), transition: {duration: LANG_OUT, ease: EASE_IN_OUT}}}
+                                >
+                                    {lang.text}
+                                </motion.p>
+                            )}
+                        </AnimatePresence>
+                    </div>
+                )}
+                {sizes && phase !== "langs" && (
                     <LayoutGroup>
                         {phase !== "block" ? (
                             /* 阶段 1~3：整句入场 → 非首字母收拢 → UWU.CAT 放大 */
@@ -209,17 +289,17 @@ export default function Home() {
                                                 transition={{duration: COLLAPSE_DUR, ease: EASE_IN_OUT, delay: idx * COLLAPSE_STAGGER}}
                                             />
                                         )}
-                                        <Rest text={pre} idx={idx} collapsed={collapsed}/>
+                                        <Rest text={pre} idx={idx} collapsed={collapsed} reduce={reduce}/>
                                         <motion.span
                                             layoutId={`initial-${idx}`}
                                             className="inline-block title-ink"
-                                            initial={{opacity: 0, y: 24, filter: "blur(10px)"}}
-                                            animate={{opacity: 1, y: 0, filter: "blur(0px)"}}
+                                            initial={cutFrom(reduce)}
+                                            animate={cutTo}
                                             transition={{duration: IN_DUR, ease: EASE_OUT, delay: idx * IN_STAGGER}}
                                         >
                                             {first}
                                         </motion.span>
-                                        <Rest text={post} idx={idx} collapsed={collapsed}/>
+                                        <Rest text={post} idx={idx} collapsed={collapsed} reduce={reduce}/>
                                     </span>
                                 ))}
                                 {phase === "title" && <Nya/>}

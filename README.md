@@ -45,4 +45,8 @@ To deploy your own fork, add a repository secret `CLOUDFLARE_API_TOKEN` (an API 
 [“Kitten, Game, Pets”](https://pixabay.com/videos/kitten-game-pets-4216/) by MixailMixail from Pixabay,
 used under the [Pixabay Content License](https://pixabay.com/service/license-summary/). It is **not** covered by CC BY-SA.
 
+The intro's subset fonts `public/fonts/intro-*.woff2` are
+[M PLUS 1p](https://fonts.google.com/specimen/M+PLUS+1p), [Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC)
+and [Tektur](https://fonts.google.com/specimen/Tektur), each under the [SIL Open Font License 1.1](https://openfontlicense.org).
+
 *not for sale, AI last.*
