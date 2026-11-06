@@ -162,7 +162,8 @@ export default function Home() {
             setSizes({
                 // 整句必须一行放下（换行会在收拢时跳行），手机上会比较小
                 small: clamp((avail * 0.94) / (measureAt100(sentence) / 100), 11, 40),
-                big: clamp((avail * 0.9) / (measureAt100(TITLE) / 100), 32, 120),
+                // 手机上不撑满屏幕（太压迫），只占 65% 宽；桌面最大 120px
+                big: clamp((avail * (w < 640 ? 0.65 : 0.9)) / (measureAt100(TITLE) / 100), 32, 120),
             });
             timers = TIMELINE.map(([p, t]) => setTimeout(() => setPhase(p), t * 1000));
         });
