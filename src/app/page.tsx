@@ -18,7 +18,7 @@ const LANGS = [
     },
     {
         lang: "zh-CN",
-        text: "以独特振奋人心 , 猫总能触动人心",
+        text: "独特不凡 , 猫猫触动人心",
         font: '"IntroZH", "PingFang SC", "Microsoft YaHei", sans-serif',
     },
     {
