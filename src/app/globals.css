@@ -51,18 +51,18 @@ body {
 .scanlines {
   background: repeating-linear-gradient(
     to bottom,
-    rgba(255, 255, 255, 0.025) 0px,
-    rgba(255, 255, 255, 0.025) 1px,
+    rgba(255, 255, 255, 0.015) 0px,
+    rgba(255, 255, 255, 0.015) 1px,
     transparent 1px,
     transparent 2px,
-    rgba(0, 0, 0, 0.28) 2px,
-    rgba(0, 0, 0, 0.28) 3px
+    rgba(0, 0, 0, 0.14) 2px,
+    rgba(0, 0, 0, 0.14) 3px
   );
 }
 
 /* 刷新亮带：从上往下慢慢扫过 */
 .crt-roll {
-  background: linear-gradient(to bottom, transparent, rgba(255, 255, 255, 0.035) 50%, transparent);
+  background: linear-gradient(to bottom, transparent, rgba(255, 255, 255, 0.02) 50%, transparent);
   mix-blend-mode: screen;
   animation: crt-roll 7s linear infinite;
 }

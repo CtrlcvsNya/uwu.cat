@@ -10,6 +10,7 @@ Source of [uwu.cat](https://uwu.cat) — a tiny personal landing page with a rea
 - **CRT look** — phosphor glow, RGB fringing, scanlines, aperture mask, rolling band and barrel curvature.
 - **Interaction** — a scrambling lens follows the cursor; every click drops a water ripple (up to 8 at once) that refracts the video.
 - **Intro animation** — the sentence *Uplift With Uniqueness . Cats Always Touch* collapses into its initials **UWU.CAT**, which then fly into the card as the background decodes in.
+- Easy on the eyes: per-cell temporal smoothing (no glyph flicker), soft scanlines, a calm looping clip.
 - Respects `prefers-reduced-motion`, pauses when the tab is hidden, falls back to a plain video without WebGL.
 
 ## Stack
@@ -39,5 +40,9 @@ To deploy your own fork, add a repository secret `CLOUDFLARE_API_TOKEN` (an API 
 ## License
 
 [CC BY-SA 4.0](LICENSE) © Ctrlcvs — you may share and adapt this work with attribution, under the same license.
+
+**Exception:** the background video `public/media/cats-540p.mp4` is a re-encode of
+[“Cats, domestic cats, pets”](https://pixabay.com/videos/cats-domestic-cats-pets-nap-166532/) from Pixabay,
+used under the [Pixabay Content License](https://pixabay.com/service/license-summary/). It is **not** covered by CC BY-SA.
 
 *not for sale, AI last.*
