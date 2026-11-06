@@ -48,6 +48,19 @@ const LINKS = [
 
 const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
 
+const TITLE = splits.map((s) => s.first).join(""); // "UWU.CAT"
+
+/** 用页面字体在 100px 下实际排一次，返回文字宽度 */
+function measureAt100(text: string) {
+    const el = document.createElement("span");
+    el.textContent = text;
+    el.style.cssText = "position:absolute;visibility:hidden;white-space:pre;font-size:100px;font-weight:700;";
+    document.body.appendChild(el);
+    const width = el.getBoundingClientRect().width;
+    el.remove();
+    return width;
+}
+
 /** 内容块里各元素的统一入场：上浮 + 去模糊 */
 const fadeUp = (delay: number) => ({
     initial: {opacity: 0, y: 8, filter: "blur(6px)"},
@@ -106,13 +119,29 @@ export default function Home() {
     const [sizes, setSizes] = useState<{ small: number; big: number } | null>(null);
 
     useEffect(() => {
-        const w = window.innerWidth;
-        setSizes({
-            small: clamp((w - 64) / 24, 20, 40),   // 整句字号：桌面上一行放得下
-            big: clamp((w - 48) / 5.2, 40, 120),   // UWU.CAT 大标题字号
+        let cancelled = false;
+        let timers: ReturnType<typeof setTimeout>[] = [];
+
+        // 等字体加载完，按真实字宽算字号，保证整句和 UWU.CAT 在任何屏幕上都不换行
+        // 自定义字体是按需加载的，显式 load 一次再量，避免量到回退字体
+        const fontsReady = document.fonts
+            ? document.fonts.load('700 100px "MyFont"', TITLE).then(() => document.fonts.ready)
+            : Promise.resolve();
+        fontsReady.catch(() => undefined).then(() => {
+            if (cancelled) return;
+            const w = window.innerWidth;
+            const avail = w - (w >= 640 ? 160 : 32); // 减去 main 的左右 padding（p-4 / sm:p-20）
+            setSizes({
+                // 整句必须一行放下（换行会在收拢时跳行），手机上会比较小
+                small: clamp((avail * 0.94) / (measureAt100(sentence) / 100), 11, 40),
+                big: clamp((avail * 0.9) / (measureAt100(TITLE) / 100), 32, 120),
+            });
+            timers = TIMELINE.map(([p, t]) => setTimeout(() => setPhase(p), t * 1000));
         });
-        const timers = TIMELINE.map(([p, t]) => setTimeout(() => setPhase(p), t * 1000));
-        return () => timers.forEach(clearTimeout);
+        return () => {
+            cancelled = true;
+            timers.forEach(clearTimeout);
+        };
     }, []);
 
     const collapsed = phase !== "in";
@@ -129,7 +158,7 @@ export default function Home() {
             {/* 全屏胶片颗粒 */}
             <div className="grain pointer-events-none fixed inset-0 z-30 opacity-[0.06] mix-blend-overlay"/>
 
-            <main className="relative z-10 grid h-full place-items-center p-6 sm:p-20">
+            <main className="relative z-10 grid h-full place-items-center p-4 sm:p-20">
                 {sizes && (
                     <LayoutGroup>
                         {phase !== "block" ? (
