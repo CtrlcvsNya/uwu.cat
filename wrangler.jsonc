@@ -3,6 +3,8 @@
   // Next.js 静态导出 (out/) 作为 Worker 静态资源托管
   "name": "uwu-cat",
   "compatibility_date": "2026-11-01",
+  // 账号 ID 不是凭据，可以公开；部署凭据是 CI 里的 CLOUDFLARE_API_TOKEN secret
+  "account_id": "b5f0961d7c60650f2924a68edc432dfd",
   // 只负责给 /media/ 下的视频补 Range(206) 支持，其余请求不经过脚本
   "main": "worker/index.ts",
   "assets": {

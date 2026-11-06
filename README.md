@@ -34,12 +34,7 @@ npm run dev        # http://localhost:3000
 ## Deployment
 
 Every push to `main` is built and deployed to Cloudflare Workers by GitHub Actions.
-To deploy your own fork, set two repository secrets:
-
-- `CLOUDFLARE_API_TOKEN` — an API token created from the **Edit Cloudflare Workers** template
-- `CLOUDFLARE_ACCOUNT_ID`
-
-and change `name` / `routes` in `wrangler.jsonc`. Manual deploy: `npm run deploy`.
+To deploy your own fork, add a repository secret `CLOUDFLARE_API_TOKEN` (an API token created from the **Edit Cloudflare Workers** template) and change `account_id` / `name` / `routes` in `wrangler.jsonc`. Manual deploy: `npm run deploy`.
 
 ---
 
