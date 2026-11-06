@@ -17,7 +17,10 @@ const HOLD = 1.5;            // 整句停留
 const COLLAPSE_DUR = 0.75;   // 非首字母收拢
 const COLLAPSE_STAGGER = 0.035;
 const GROW_DUR = 0.9;        // UWU.CAT 放大
-const TITLE_HOLD = 0.45;     // 大标题停留后飞入方框
+const NYA_DELAY = 0.7;       // UWU.CAT 开始放大后多久冒出 Nya~
+const NYA_DUR = 1.25;        // Nya~ 弹出 → 停留 → 消失
+// 大标题停留到 Nya~ 刚好消失，再飞入方框
+const TITLE_HOLD = NYA_DELAY + NYA_DUR - GROW_DUR;
 const FLY_DUR = 1.05;        // 大标题 → 方框内小标题
 
 const TOTAL_IN = (words.length - 1) * IN_STAGGER + IN_DUR;
@@ -97,6 +100,31 @@ const Logo = () => (
     </svg>
 );
 
+/** 大标题右上角弹出的 Nya~：弹性冒出 → 轻微晃动 → 上浮模糊消失 */
+const Nya = () => (
+    // 外层负责定位（字号用 em，跟随标题一起放大），内层负责动画
+    <span
+        className="pointer-events-none absolute right-0 top-0 translate-x-[45%] -translate-y-[70%]"
+        style={{fontSize: "0.28em"}}
+        aria-hidden="true"
+    >
+        <motion.span
+            className="block whitespace-nowrap font-bold text-accent drop-shadow-[0_0_10px_rgba(206,255,28,0.55)]"
+            initial={{opacity: 0, scale: 0, rotate: -24, y: 8}}
+            animate={{
+                opacity: [0, 1, 1, 1, 0],
+                scale: [0, 1.18, 0.95, 1, 0.85],
+                rotate: [-24, -6, -12, -9, -4],
+                y: [8, 0, 0, 0, -12],
+                filter: ["blur(4px)", "blur(0px)", "blur(0px)", "blur(0px)", "blur(4px)"],
+            }}
+            transition={{duration: NYA_DUR, delay: NYA_DELAY, times: [0, 0.18, 0.3, 0.76, 1], ease: "easeOut"}}
+        >
+            Nya~
+        </motion.span>
+    </span>
+);
+
 const ArrowIcon = () => (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"
          className="w-3 h-3 transition-transform duration-300 group-hover:translate-x-0.5 group-hover:-translate-y-0.5">
@@ -164,7 +192,7 @@ export default function Home() {
                         {phase !== "block" ? (
                             /* 阶段 1~3：整句入场 → 非首字母收拢 → UWU.CAT 放大 */
                             <div
-                                className="flex flex-wrap justify-center items-end font-bold"
+                                className="relative flex flex-wrap justify-center items-end font-bold"
                                 style={{
                                     fontSize: phase === "title" ? sizes.big : sizes.small,
                                     transition: `font-size ${GROW_DUR}s cubic-bezier(${EASE_IN_OUT.join(",")})`,
@@ -193,6 +221,7 @@ export default function Home() {
                                         <Rest text={post} idx={idx} collapsed={collapsed}/>
                                     </span>
                                 ))}
+                                {phase === "title" && <Nya/>}
                             </div>
                         ) : (
                             /* 阶段 4：方框展开，大标题飞入成为小标题 */
