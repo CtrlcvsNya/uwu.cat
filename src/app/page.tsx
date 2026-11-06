@@ -100,22 +100,22 @@ const Logo = () => (
     </svg>
 );
 
-/** 大标题右上角弹出的 Nya~：弹性冒出 → 轻微晃动 → 上浮模糊消失 */
+/** 大标题右上角弹出的 Nya~：弹性冒出 → 轻微晃动 → 下沉模糊消失（整体向右下倾斜） */
 const Nya = () => (
     // 外层负责定位（字号用 em，跟随标题一起放大），内层负责动画
     <span
-        className="pointer-events-none absolute right-0 top-0 translate-x-[45%] -translate-y-[70%]"
-        style={{fontSize: "0.28em"}}
+        className="pointer-events-none absolute right-0 top-0 translate-x-[40%] -translate-y-[60%]"
+        style={{fontSize: "0.42em"}}
         aria-hidden="true"
     >
         <motion.span
-            className="block whitespace-nowrap font-bold text-accent drop-shadow-[0_0_10px_rgba(206,255,28,0.55)]"
-            initial={{opacity: 0, scale: 0, rotate: -24, y: 8}}
+            className="block whitespace-nowrap font-bold text-accent drop-shadow-[0_0_12px_rgba(206,255,28,0.55)]"
+            initial={{opacity: 0, scale: 0, rotate: 24, y: -8}}
             animate={{
                 opacity: [0, 1, 1, 1, 0],
                 scale: [0, 1.18, 0.95, 1, 0.85],
-                rotate: [-24, -6, -12, -9, -4],
-                y: [8, 0, 0, 0, -12],
+                rotate: [24, 6, 12, 9, 14],
+                y: [-8, 0, 0, 0, 12],
                 filter: ["blur(4px)", "blur(0px)", "blur(0px)", "blur(0px)", "blur(4px)"],
             }}
             transition={{duration: NYA_DUR, delay: NYA_DELAY, times: [0, 0.18, 0.3, 0.76, 1], ease: "easeOut"}}
@@ -178,7 +178,7 @@ export default function Home() {
     return (
         <div className="fixed inset-0 overflow-hidden overscroll-none touch-none select-none">
             {/* 背景：字符视频，方框出现时开始“解码”扫描入场 */}
-            <AsciiVideo src="/media/cats-540p.mp4" revealed={phase === "block"} className="fixed inset-0 z-0"/>
+            <AsciiVideo src="/media/kitten-540p.mp4" revealed={phase === "block"} className="fixed inset-0 z-0"/>
             {/* 中心压暗，保证文字可读 */}
             <div className="pointer-events-none fixed inset-0 z-0 bg-[radial-gradient(ellipse_at_center,rgba(0,0,0,0.35)_0%,rgba(0,0,0,0)_55%)]"/>
             {/* CRT 扫描线 + 缓慢滚动的刷新亮带：只盖在背景上，不压住方框和文字 */}

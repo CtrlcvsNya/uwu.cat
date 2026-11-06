@@ -41,8 +41,8 @@ To deploy your own fork, add a repository secret `CLOUDFLARE_API_TOKEN` (an API 
 
 [CC BY-SA 4.0](LICENSE) © Ctrlcvs — you may share and adapt this work with attribution, under the same license.
 
-**Exception:** the background video `public/media/cats-540p.mp4` is a re-encode of
-[“Cats, domestic cats, pets”](https://pixabay.com/videos/cats-domestic-cats-pets-nap-166532/) from Pixabay,
+**Exception:** the background video `public/media/kitten-540p.mp4` is a re-encode of
+[“Kitten, Game, Pets”](https://pixabay.com/videos/kitten-game-pets-4216/) by MixailMixail from Pixabay,
 used under the [Pixabay Content License](https://pixabay.com/service/license-summary/). It is **not** covered by CC BY-SA.
 
 *not for sale, AI last.*
