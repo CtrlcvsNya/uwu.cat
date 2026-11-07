@@ -57,7 +57,7 @@
  *                       what should be rebuilt, e.g. with flushSync), snapshots it and
  *                       builds it; resolves when built. With logo: () => ({x,y,size}),
  *                       moving the logo there (the idle crew holds on to it) and painting
- *                       it are its first two layers; nothing else starts before they're done
+ *                       it are its first two layers; the rest starts once it's in place
  *   s.clickPlay()       a cursor clicks a Play button in the bar; resolves on the click
  *   s.reveal()          the canvas turns transparent (live page shows, cursors stay)
  *   s.relayout()        call after the page re-laid itself out (window resized):
@@ -4476,14 +4476,15 @@
       const job = (run, deps) => ({ id: 0, y: L.y, spec: { type: "script", run }, deps, state: "wait", doneAt: 0, layer: "world", gate: 0 });
       const move = job((c) => this.grabLogo(c, getTo, () => {}, true), []);
       const paint = job((c) => this.paintLogo(c, () => {}), [move]);
-      this.gateOnLogo(model.tasks, paint);
+      // once it's in place the crew gets to work, while one of them paints it
+      this.gateOnLogo(model.tasks, move);
       model.tasks = [move, paint, ...model.tasks];
       model.tasks.forEach((t, i) => (t.id = i));
     }
 
-    // nothing else starts until the logo is in place and painted
-    gateOnLogo(tasks, paint) {
-      for (const t of tasks) if (t.spec.type !== "script") t.deps = [...t.deps, paint];
+    // nothing else starts until the logo is in place
+    gateOnLogo(tasks, gate) {
+      for (const t of tasks) if (t.spec.type !== "script") t.deps = [...t.deps, gate];
     }
 
     // The page changed size mid-build: snapshot it again in its new layout. Pieces that
@@ -4507,8 +4508,8 @@
       // scripted jobs (moving the logo...) aren't part of the snapshot: carry them over
       const scripts = this.model.tasks.filter((t) => t.spec.type === "script");
       if (scripts.length) {
-        const last = scripts[scripts.length - 1];
-        if (last.state !== "done") this.gateOnLogo(m.tasks, last);
+        const gate = scripts[0]; // moving the logo into place
+        if (gate.state !== "done") this.gateOnLogo(m.tasks, gate);
         m.tasks = [...scripts, ...m.tasks];
         m.tasks.forEach((t, i) => (t.id = i));
       }
