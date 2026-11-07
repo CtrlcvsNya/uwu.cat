@@ -48,7 +48,7 @@ const TIMELINE: [Phase, number][] = [
 type SwarmSession = {
     readonly alive: boolean;
     gather(ms: number): Promise<void>;
-    logoShow(o: { x: number; y: number; size: number }): void;
+    logoShow(o: () => { x: number; y: number; size: number }): void;
     logoDrag(getTo: () => { x: number; y: number; size: number }): Promise<void>;
     logoPaint(): Promise<void>;
     orbit(target: boolean | (() => { x: number; y: number })): void;
@@ -56,6 +56,7 @@ type SwarmSession = {
     build(o: { prepare: () => void }): Promise<void>;
     clickPlay(): Promise<void>;
     reveal(): void;
+    relayout(): void;
     leave(): Promise<void>;
     close(): void;
 };
@@ -127,6 +128,19 @@ function measureAt100(text: string) {
     const width = el.getBoundingClientRect().width;
     el.remove();
     return width;
+}
+
+/** 按当前窗口算字号：整句一行放得下，UWU.CAT 放大后不撑满屏幕 */
+function computeSizes() {
+    const W = window.innerWidth;
+    const avail = W - (W >= 640 ? 160 : 32); // 减去 main 的左右 padding（p-4 / sm:p-20）
+    return {
+        // 整句必须一行放下（换行会在收拢时跳行），手机上会比较小
+        small: clamp((avail * 0.94) / (measureAt100(sentence) / 100), 11, 40),
+        // 手机上不撑满屏幕（太压迫），只占 65% 宽；桌面最大 120px
+        big: clamp((avail * (W < 640 ? 0.65 : 0.9)) / (measureAt100(TITLE) / 100), 32, 120),
+        kerns: splits.map(kernAfterFirst),
+    };
 }
 
 /**
@@ -278,16 +292,25 @@ export default function Home() {
         const fontsReady = document.fonts
             ? document.fonts.load('700 100px "MyFont"', TITLE).then(() => document.fonts.ready)
             : Promise.resolve();
+        // 窗口大小变了：重新算字号；swarm 正在重建的话，让它按新排版重新拍一次快照
+        let sized = computeSizes();
+        let session: SwarmSession | null = null;
+        let resizeT: ReturnType<typeof setTimeout> | undefined;
+        const onResize = () => {
+            clearTimeout(resizeT);
+            resizeT = setTimeout(() => {
+                if (cancelled) return;
+                sized = computeSizes();
+                flushSync(() => setSizes(sized));
+                session?.relayout();
+            }, 120);
+        };
+
         Promise.all([fontsReady.catch(() => undefined), waitForSwarm(4000)]).then(([, startSession]) => {
             if (cancelled) return;
-            const W = window.innerWidth;
-            const H = window.innerHeight;
-            const avail = W - (W >= 640 ? 160 : 32); // 减去 main 的左右 padding（p-4 / sm:p-20）
-            // 整句必须一行放下（换行会在收拢时跳行），手机上会比较小
-            const small = clamp((avail * 0.94) / (measureAt100(sentence) / 100), 11, 40);
-            // 手机上不撑满屏幕（太压迫），只占 65% 宽；桌面最大 120px
-            const big = clamp((avail * (W < 640 ? 0.65 : 0.9)) / (measureAt100(TITLE) / 100), 32, 120);
-            setSizes({small, big, kerns: splits.map(kernAfterFirst)});
+            sized = computeSizes();
+            setSizes(sized);
+            window.addEventListener("resize", onResize);
 
             // 普通动画开场（swarm 脚本没加载到 / 被 CSP 拦截）
             const plain = () => {
@@ -317,35 +340,44 @@ export default function Home() {
                 onAbort: finish,
             });
             if (!s) return plain();
+            session = s;
             setSwarm(true);
 
+            // 下面这些位置都是函数，每帧按当前窗口 / 排版重新算，调整窗口时 logo 和光标会跟着走
+            const center = () => ({x: window.innerWidth / 2, y: window.innerHeight / 2, size: LOGO_INTRO_SIZE});
             // logo 停在句子下方，低到光标绕着它转圈时碰不到之后放大的 UWU.CAT（行高 1.25），
             // 又不压到底部的控制条（约 64px 高）
-            const parkedY = Math.min(H / 2 + big * 0.625 + ORBIT_HALF_H + 14, H - ORBIT_HALF_H - 64);
-            const parked = {x: W / 2, y: parkedY, size: LOGO_PARKED_SIZE};
+            const parked = () => {
+                const H = window.innerHeight;
+                return {
+                    x: window.innerWidth / 2,
+                    y: Math.min(H / 2 + sized.big * 0.625 + ORBIT_HALF_H + 14, H - ORBIT_HALF_H - 64),
+                    size: LOGO_PARKED_SIZE,
+                };
+            };
             // 第二阶段光标在方框下方转圈，不挡方框里的字
             const nest = () => {
                 const r = cardRef.current?.getBoundingClientRect();
-                if (!r) return parked;
-                return {x: r.left + r.width / 2, y: Math.min(r.bottom + ORBIT_HALF_H + 10, H - ORBIT_HALF_H - 64)};
+                if (!r) return parked();
+                return {x: r.left + r.width / 2, y: Math.min(r.bottom + ORBIT_HALF_H + 10, window.innerHeight - ORBIT_HALF_H - 64)};
             };
             // 方框里真 logo 的位置和大小（方框隐藏时也已经排好版）
             const home = () => {
                 const r = logoRef.current?.querySelector("svg")?.getBoundingClientRect();
-                return r ? {x: r.left + r.width / 2, y: r.top + r.height / 2, size: r.width} : parked;
+                return r ? {x: r.left + r.width / 2, y: r.top + r.height / 2, size: r.width} : parked();
             };
             // 光标拍 UWU.CAT 的位置：右半边、偏上（Nya~ 从右上角冒出来）
             const titleSpot = () => {
                 const r = titleRef.current?.getBoundingClientRect();
-                return r ? {x: r.right - r.width * 0.16, y: r.top + r.height * 0.45} : {x: W / 2, y: H / 2};
+                return r ? {x: r.right - r.width * 0.16, y: r.top + r.height * 0.45} : center();
             };
 
             const run = async () => {
                 // 1. 黑屏中间一个灰色 logo，光标们飞进来围着它转；一个光标把它拖到句子下方
                 s.orbit(true);
-                s.logoShow({x: W / 2, y: H / 2, size: LOGO_INTRO_SIZE});
+                s.logoShow(center);
                 await step(s.gather(1500));
-                await step(s.logoDrag(() => parked));
+                await step(s.logoDrag(parked));
 
                 // 2. 光标把整句话一词一词画出来；画完围着 logo 转圈，一个光标去点 Play
                 await step(s.build({
@@ -400,6 +432,8 @@ export default function Home() {
         return () => {
             cancelled = true;
             timers.forEach(clearTimeout);
+            clearTimeout(resizeT);
+            window.removeEventListener("resize", onResize);
         };
     }, []);
 

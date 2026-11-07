@@ -53,6 +53,8 @@
  *                       builds it; resolves when built
  *   s.clickPlay()       a cursor clicks a Play button in the bar; resolves on the click
  *   s.reveal()          the canvas turns transparent (live page shows, cursors stay)
+ *   s.relayout()        call after the page re-laid itself out (window resized):
+ *                       re-snapshots mid-build, keeping what is already built
  *   s.leave()           the cursors leave to both sides; resolves when they are gone
  *   s.close()           removes the overlay at once
  * Elements with data-swarm-keep are part of a snapshot but start out built.
@@ -544,6 +546,17 @@
    * Items live in "world" coords (scroller content space) or, for fixed UI,
    * in screen coords on an "over"/"under" layer.
    */
+  // Stable ids for page elements across snapshots, so a re-snapshot after a resize
+  // can tell which rebuilt pieces are the same thing (session mode relayout).
+  const ELEM_IDS = new WeakMap();
+  let elemSeq = 0;
+  const elemId = (el) => {
+    if (!el || typeof el !== "object") return 0;
+    let id = ELEM_IDS.get(el);
+    if (!id) ELEM_IDS.set(el, (id = ++elemSeq));
+    return id;
+  };
+
   function captureModel(env, shot) {
     const { ox, oy, sx, sy, vw, vh } = env.geom();
     const docW = Math.max(env.scrollWidth(), vw);
@@ -586,6 +599,8 @@
         : b.x + b.w > 0 && b.x < innerWidth && b.y + b.h > 0 && b.y < innerHeight;
 
     let keepDepth = 0; // > 0 while walking inside [data-swarm-keep]
+    let curEl = null; // the element being walked (for srcKey)
+    const perEl = new Map();
 
     function add(it) {
       it.id = items.length;
@@ -597,6 +612,10 @@
       it.scale = 1;
       it.mode = "own";
       if (keepDepth > 0) it.keep = true;
+      const k = `${elemId(curEl)}:${it.kind}`;
+      const n = perEl.get(k) || 0;
+      perEl.set(k, n + 1);
+      it.srcKey = `${k}:${n}`;
       items.push(it);
       return it;
     }
@@ -1078,12 +1097,15 @@
     }
 
     function walk(el, ctx, parent) {
-      if (!(el.hasAttribute && el.hasAttribute("data-swarm-keep"))) return walkEl(el, ctx, parent);
-      keepDepth++;
+      const prev = curEl;
+      const keep = !!(el.hasAttribute && el.hasAttribute("data-swarm-keep"));
+      curEl = el;
+      if (keep) keepDepth++;
       try {
         walkEl(el, ctx, parent);
       } finally {
-        keepDepth--;
+        if (keep) keepDepth--;
+        curEl = prev;
       }
     }
 
@@ -1605,16 +1627,18 @@
 .logo>.g{color:#D7DADE;opacity:.42}
 .intro img{display:block;width:60px;height:60px;object-fit:contain;filter:grayscale(1);opacity:.42;border-radius:14px}
 .intro .mono{width:60px;height:60px;border-radius:16px;background:#D7DADE;color:#fff;font:700 30px/60px Inter,system-ui,sans-serif;text-align:center}
-.hud{position:absolute;left:50%;bottom:20px;transform:translate(-50%,18px);opacity:0;display:flex;align-items:center;gap:10px;padding:6px 6px 6px 10px;background:rgba(30,30,30,.94);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);color:#fff;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.28),inset 0 0 0 1px rgba(255,255,255,.07);font:500 12px/1 Inter,system-ui,-apple-system,"Segoe UI",sans-serif;pointer-events:auto;transition:opacity .45s ease,transform .45s cubic-bezier(.2,.8,.2,1);white-space:nowrap;user-select:none;z-index:5}
+.hud{position:absolute;left:50%;bottom:20px;transform:translate(-50%,18px);opacity:0;display:flex;align-items:center;gap:10px;padding:6px 6px 6px 10px;background:rgba(30,30,30,.94);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);color:#fff;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.28),inset 0 0 0 1px rgba(255,255,255,.07);font:500 12px/1 Inter,system-ui,-apple-system,"Segoe UI",sans-serif;pointer-events:auto;transition:opacity .45s ease,transform .45s cubic-bezier(.2,.8,.2,1);white-space:nowrap;user-select:none;z-index:5;max-width:calc(100vw - 24px);box-sizing:border-box}
 .hud.on{opacity:1;transform:translate(-50%,0)}
 .hud .dots{display:flex;padding-left:5px}
 .hud .dots i{display:block;width:18px;height:18px;margin-left:-5px;border-radius:50%;border:2px solid #1e1e1e;font:700 9px/14px Inter,system-ui,sans-serif;font-style:normal;text-align:center;color:#fff;transition:background .3s}
 .hud .txt,.hud .status{display:flex;align-items:center;gap:7px;color:#cfcfcf;font-variant-numeric:tabular-nums}
+.hud .txt{flex:1 1 auto;min-width:0;overflow:hidden}
+.hud .dots,.hud .bar{flex:none}
 .hud .txt b{color:#fff;font-weight:600}
 .hud .sep{width:1px;height:12px;background:#444}
 .hud .bar{width:64px;height:3px;border-radius:2px;background:#3a3a3a;overflow:hidden}
 .hud .bar i{display:block;height:100%;width:0;background:#0D99FF;transition:width .35s ease}
-.hud button{all:unset;cursor:pointer;padding:7px 10px;border-radius:8px;background:#2c2c2c;color:#fff;font:500 12px/1 Inter,system-ui,-apple-system,sans-serif;transition:background .15s}
+.hud button{all:unset;flex:none;cursor:pointer;padding:7px 10px;border-radius:8px;background:#2c2c2c;color:#fff;font:500 12px/1 Inter,system-ui,-apple-system,sans-serif;transition:background .15s}
 .hud button:hover{background:#3a3a3a}
 .hud button.pri{background:#0D99FF}
 .hud button.pri:hover{background:#2aa6ff}
@@ -1627,6 +1651,14 @@
 .hud button.snd{display:flex;align-items:center;gap:6px;padding:6px 8px}
 .hud button.snd.off{color:#8a8a8a}
 .hud button.snd.tap{background:#0D99FF;animation:hudpulse 1.6s ease-in-out infinite}
+@media (max-width:560px){
+.hud{bottom:max(12px,env(safe-area-inset-bottom));gap:7px;padding:5px 5px 5px 9px;font-size:11px;border-radius:11px}
+.hud .dots,.hud .bar,.hud button[data-a="speed"]{display:none}
+.hud .txt,.hud .status{gap:5px}
+.hud button{padding:7px 9px;font-size:11px}
+.hud button.snd{padding:6px 7px}
+.hud button.snd span{display:none}
+}
 @keyframes hudpulse{50%{box-shadow:0 0 0 4px rgba(13,153,255,.28)}}
 `;
 
@@ -2239,7 +2271,7 @@
       }
     }
 
-    setModel(m) {
+    setModel(m, quiet) {
       this.items = m.items;
       this.tasks = m.tasks;
       this.groups = m.groups;
@@ -2252,10 +2284,13 @@
       if (this.started) {
         // another build in the same session: the flock goes back to work
         this.flocking = false;
-        this.retired = 0;
-        this.startTime = this.time;
+        if (!quiet) {
+          // a fresh build (not a relayout of the current one): new stats for the bar
+          this.retired = 0;
+          this.startTime = this.time;
+        }
         for (const c of this.cursors) {
-          c.worked = false;
+          if (!quiet) c.worked = false;
           if (c.solo || c.leaving) continue;
           c.follow = this.idleOrbit;
           c.gen = null;
@@ -2264,7 +2299,7 @@
           c.idleFor = 0;
           c.angle = ((((c.angle + 180) % 360) + 360) % 360) - 180;
         }
-        if (this.sfx) this.sfx.start();
+        if (this.sfx && !quiet) this.sfx.start();
       }
       // [data-swarm-keep]: on the canvas from the first frame, no cursor touches it
       for (const it of m.items) {
@@ -4080,6 +4115,7 @@
 
     // the canvas hides the page again (before a build)
     cover() {
+      this.revealed = false;
       const v = this.view;
       for (const el of [v.bg, v.under, v.port, v.over, v.ov, v.badges, v.rulers]) el.style.removeProperty("visibility");
       v.host.style.setProperty("pointer-events", "auto", "important");
@@ -4088,6 +4124,7 @@
     // the canvas turns transparent: the live page shows, the cursors and the logo stay on top
     reveal() {
       if (this.dead) return;
+      this.revealed = true;
       const v = this.view;
       for (const el of [v.bg, v.under, v.port, v.over, v.ov, v.badges, v.rulers]) el.style.setProperty("visibility", "hidden", "important");
       v.hud.classList.remove("on");
@@ -4130,6 +4167,67 @@
         this._built = resolve;
         if (!E.started) E.start();
       });
+    }
+
+    // The page changed size mid-build: snapshot it again in its new layout. Pieces that
+    // were already built stay built (matched by element), the rest is rebuilt there;
+    // cursors in the middle of something drop it and pick up fresh work.
+    relayout() {
+      if (this.dead || this.revealed || !this.model) return;
+      const v = this.view;
+      const E = this.engine;
+      v.measure();
+      let m;
+      try {
+        m = captureModel(this.env, null);
+      } catch (err) {
+        console.error("[swarm-rebuild] capture failed", err);
+        return;
+      }
+      const built = new Map();
+      for (const it of this.model.items) if (it.done && it.vis) built.set(it.srcKey, it);
+      const was = (it) => built.has(it.srcKey) || it.keep;
+      for (const t of m.tasks) {
+        const s = t.spec;
+        const its = s.type === "dup" ? s.g.dst[s.k].items : s.it ? [s.it] : [];
+        if (its.length && its.every(was)) {
+          t.state = "done";
+          t.doneAt = E.time;
+        }
+      }
+      for (const c of E.cursors) {
+        if (!c.task) continue;
+        c.task = null;
+        c.gen = null;
+        c.ov = null;
+        if (c.sticky) {
+          const vp = E.vp;
+          c.sticky = false;
+          c.x -= vp.ox - vp.sx;
+          c.y -= vp.oy - vp.sy;
+        }
+      }
+      for (const g of m.guides) g.vis = false;
+      const complete = this.complete;
+      v.unmount();
+      v.mount(m);
+      E.setModel(m, true);
+      E.waitCount = m.tasks.filter((t) => t.state === "wait").length;
+      E.doneCount = m.tasks.length - E.waitCount;
+      for (const it of m.items) {
+        if (!built.has(it.srcKey)) continue;
+        it.vis = true;
+        it.styled = true;
+        it.done = true;
+        it.draw = null;
+        it.mode = "own";
+        if (it.kind === "text") it.shown = it.total;
+        if (it.kind === "line") it.placed = it.pts.length;
+        bump(it);
+      }
+      if (complete) E.flocking = true; // already finished: don't announce it twice
+      this.model = m;
+      v.render(E);
     }
 
     // where idle cursors circle: true = around the logo, a function = around that
@@ -4243,9 +4341,12 @@
     // ---- the logo sprite: starts grey in the middle (like the favicon intro),
     // gets dragged around by a cursor, then painted in from the top down
 
+    // o: {x, y, size} or a function returning it (viewport px), followed live
     logoShow(o) {
       if (this.dead) return;
       const S = this.opts.logo || {};
+      this.logoAnchor = typeof o === "function" ? o : () => o;
+      o = this.logoAnchor();
       const el = this.view.logo;
       el.querySelector(".g").innerHTML = S.svg || "";
       el.querySelector(".c").innerHTML = S.svg || "";
@@ -4267,6 +4368,13 @@
     renderLogo(dt) {
       const L = this.logo;
       const el = this.view.logo;
+      // follow the page (window resized) while it sits still
+      if (!this.logoBusy && this.logoAnchor) {
+        const a = this.logoAnchor();
+        L.x = a.x;
+        L.y = a.y;
+        L.size = a.size || L.size;
+      }
       let scale = 1;
       if (L.popT >= 0) {
         L.popT += dt;
@@ -4295,6 +4403,7 @@
         const ok = this.solo(E.fromViewport(L.x, L.y), (c) => this.grabLogo(c, getTo, resolve));
         if (!ok) {
           Object.assign(L, getTo());
+          this.logoAnchor = getTo;
           resolve();
         }
       });
@@ -4321,6 +4430,7 @@
       const e0 = end();
       const total = Math.max(1, Math.hypot(e0.x - start.x, e0.y - start.y));
       c.press = 1;
+      this.logoBusy = true;
       yield* E.moveTo(c, end, {
         speed: 0.36,
         drag: true,
@@ -4335,6 +4445,8 @@
         },
       });
       Object.assign(L, getTo());
+      this.logoAnchor = getTo;
+      this.logoBusy = false;
       if (this.sfx) this.sfx.place("image", L.x, L.y, L.size, L.size, E.vp.vw, E.vp.vh, 0);
       yield* E.wait(0.4);
       c.ov = null;
@@ -4541,6 +4653,7 @@
       logoPaint: () => a.logoPaint(),
       orbit: (target) => a.orbit(target),
       tap: (get) => a.tap(get),
+      relayout: () => a.relayout(),
       build: (o) => a.build(o),
       clickPlay: () => a.clickPlay(),
       reveal: () => a.reveal(),
