@@ -1,5 +1,5 @@
 "use client";
-import {motion, LayoutGroup, type Transition} from "motion/react";
+import {motion, AnimatePresence, LayoutGroup, type Transition} from "motion/react";
 import {useEffect, useRef, useState} from "react";
 import {flushSync} from "react-dom";
 import Script from "next/script";
@@ -38,11 +38,13 @@ const TIMELINE: [Phase, number][] = [
 
 // ---------------- Swarm 开场（public/swarm-cursors.js 的 session 模式） ----------------
 // 同一群光标从头陪到尾：
-// 1. 黑屏中间是灰色的 logo，一个光标把它拖到那句话下方（够低，光标绕着它转圈时不挡字）
+// 0. 黑屏中间是灰色的 logo，光标们飞进来围着它转；下方用多国语言轮流写“点击图标”，等访客点击
+//    （这一下点击也让浏览器允许播放声音）。点下去 logo 一弹、爆开一圈光，光标被冲散再聚拢
+// 1. 一个光标把 logo 拖到那句话下方（够低，光标绕着它转圈时不挡字）
 // 2. 光标把整句话画出来，画完后围着 logo 转圈，一个光标去点底部的 Play
 // 3. 页面播放收拢动画：UWU.CAT 放大，一个光标飞过去拍它一下 → 弹出 Nya~ → 飞进方框位置
-// 4. 光标们挪到方框下方转圈；一个光标把 logo 拖到方框里它该在的位置，再拿笔从上往下给它上色
-// 5. 光标一个接一个离开圈子去干活：重建背景视频（一块黑屏）和方框
+// 4. 底部的进度条弹出来：第二轮重建的头两个 layer 是“把 logo 缩小并拖进方框”和“从上往下给它上色”，
+//    做完之后光标再一个接一个离开圈子去干活：重建背景视频（一块黑屏）和方框
 // 6. 全部完成后光标从两边散开离场，然后电视“开机”：一震一闪，视频亮起并开始播放
 // 光标绕圈是扁椭圆：横向约 ±140px，纵向约 ±70px（ORBIT_* 两个参数）
 type SwarmSession = {
@@ -51,9 +53,11 @@ type SwarmSession = {
     logoShow(o: () => { x: number; y: number; size: number }): void;
     logoDrag(getTo: () => { x: number; y: number; size: number }): Promise<void>;
     logoPaint(): Promise<void>;
+    logoClick(): Promise<void>;
+    pressLogo(): void;
     orbit(target: boolean | (() => { x: number; y: number })): void;
     tap(get: () => { x: number; y: number }): Promise<void>;
-    build(o: { prepare: () => void }): Promise<void>;
+    build(o: { prepare: () => void; logo?: () => { x: number; y: number; size: number } }): Promise<void>;
     clickPlay(): Promise<void>;
     reveal(): void;
     relayout(): void;
@@ -63,6 +67,7 @@ type SwarmSession = {
 type SwarmSessionOpts = {
     logo: { svg: string; color: string; glow?: string };
     crew?: number;
+    builds?: number;
     orbitScale?: number;
     orbitSquash?: number;
     onAbort?: () => void;
@@ -94,7 +99,20 @@ const ORBIT_SCALE = 0.6;      // 绕圈大小
 const ORBIT_SQUASH = 0.5;     // 绕圈压扁程度（纵向 / 横向）
 const ORBIT_HALF_H = 80;      // 椭圆纵向半径 + 光标本身的高度，用来算 logo 要放多低才不挡字
 const LOGO_INTRO_SIZE = 60;   // 开场时屏幕中间 logo 的大小（和原来的 favicon 开场一样）
-const LOGO_PARKED_SIZE = 52;  // 停在句子下方时的大小
+const LOGO_PARKED_SIZE = 60;  // 停在句子下方时的大小（保持开场的大 logo；拖进方框前光标会先把它缩小）
+
+// 开场等待点击时 logo 下方轮流显示的提示
+const CLICK_PROMPTS = [
+    {lang: "en", text: "Click the icon"},
+    {lang: "zh-CN", text: "点击图标"},
+    {lang: "ja", text: "アイコンをクリック"},
+    {lang: "ko", text: "아이콘을 클릭하세요"},
+    {lang: "fr", text: "Cliquez sur l’icône"},
+    {lang: "de", text: "Klicke auf das Symbol"},
+    {lang: "es", text: "Haz clic en el icono"},
+    {lang: "ru", text: "Нажмите на значок"},
+];
+const PROMPT_STEP = 1.5; // 每种语言停留（秒）
 
 // 第二轮里背景视频的替身：一张黑图，光标会把它当成一块媒体框画出来（所以“视频一开始是黑的”）
 const BLACK_SCREEN =
@@ -208,6 +226,51 @@ const LOGO_SWARM = {
     glow: "drop-shadow(0 0 12px rgba(206,255,28,0.45))",
 };
 
+/**
+ * 开场提示：logo 下方一行小字，多国语言轮流“点击图标”，切换时去模糊 + 轻微上浮。
+ * 位置在光标绕圈的椭圆之下，不会被挡住。
+ */
+function ClickPrompt() {
+    const [i, setI] = useState(0);
+    useEffect(() => {
+        const t = setInterval(() => setI((k) => (k + 1) % CLICK_PROMPTS.length), PROMPT_STEP * 1000);
+        return () => clearInterval(t);
+    }, []);
+    const p = CLICK_PROMPTS[i];
+    return (
+        <motion.div
+            className="pointer-events-none fixed inset-x-0 z-20 flex flex-col items-center"
+            style={{top: `calc(50% + ${LOGO_INTRO_SIZE / 2 + ORBIT_HALF_H + 10}px)`}}
+            initial={{opacity: 0, y: 10, filter: "blur(8px)"}}
+            animate={{opacity: 1, y: 0, filter: "blur(0px)", transition: {duration: 0.8, ease: EASE_OUT, delay: 0.6}}}
+            exit={{opacity: 0, y: 6, filter: "blur(10px)", transition: {duration: 0.45, ease: EASE_IN_OUT}}}
+            aria-live="polite"
+        >
+            {/* 一个小小的上指箭头，轻轻上下浮动，指向 logo */}
+            <motion.span
+                className="block h-2 w-2 rotate-45 border-l border-t border-accent/70"
+                animate={{y: [0, -4, 0]}}
+                transition={{duration: 1.6, ease: "easeInOut", repeat: Infinity}}
+                aria-hidden="true"
+            />
+            <div className="mt-3 grid place-items-center">
+                <AnimatePresence initial={false}>
+                    <motion.p
+                        key={p.lang}
+                        lang={p.lang}
+                        className="[grid-area:1/1] whitespace-nowrap font-mono text-[11px] uppercase tracking-[0.28em] text-white/55"
+                        initial={{opacity: 0, y: 8, filter: "blur(6px)"}}
+                        animate={{opacity: 1, y: 0, filter: "blur(0px)", transition: {duration: 0.5, ease: EASE_OUT}}}
+                        exit={{opacity: 0, y: -6, filter: "blur(6px)", transition: {duration: 0.3, ease: EASE_IN_OUT}}}
+                    >
+                        {p.text}
+                    </motion.p>
+                </AnimatePresence>
+            </div>
+        </motion.div>
+    );
+}
+
 const Logo = () => (
     <svg viewBox="0 0 123 123" aria-hidden="true" fill="currentColor"
          className="w-8 h-8 md:w-10 md:h-10 text-accent drop-shadow-[0_0_12px_rgba(206,255,28,0.45)]">
@@ -267,6 +330,7 @@ export default function Home() {
     const [standIn, setStandIn] = useState(false);     // 第二轮快照：背景视频的黑屏替身
     const [tvOn, setTvOn] = useState(false);           // 全部完成后：电视开机，视频亮起并播放
     const [nya, setNya] = useState(false);             // swarm：光标拍了 UWU.CAT 一下 → Nya~
+    const [prompt, setPrompt] = useState(false);       // swarm：开场等待点击 logo 的多国语言提示
     const logoRef = useRef<HTMLDivElement>(null);      // 方框里的真 logo（swarm 把 logo 拖到这里）
     const titleRef = useRef<HTMLDivElement>(null);     // 收拢/放大中的标题（光标去拍它）
     const cardRef = useRef<HTMLDivElement>(null);      // 方框（第二阶段光标在它下方转圈）
@@ -295,6 +359,7 @@ export default function Home() {
         // 窗口大小变了：重新算字号；swarm 正在重建的话，让它按新排版重新拍一次快照
         let sized = computeSizes();
         let session: SwarmSession | null = null;
+        let onKey: ((e: KeyboardEvent) => void) | null = null;
         let resizeT: ReturnType<typeof setTimeout> | undefined;
         const onResize = () => {
             clearTimeout(resizeT);
@@ -325,6 +390,8 @@ export default function Home() {
             const finish = () => {
                 aborted = true;
                 timers.forEach(clearTimeout);
+                if (onKey) window.removeEventListener("keydown", onKey);
+                setPrompt(false);
                 setWordsOnly(false);
                 setPhase("block");
                 setCardShown(true);
@@ -335,6 +402,7 @@ export default function Home() {
             const s = startSession({
                 logo: LOGO_SWARM,
                 crew: SWARM_CREW,
+                builds: 2, // 第一段收尾停在“未完待续”的和弦上，第二段才落到完整的大和弦
                 orbitScale: ORBIT_SCALE,
                 orbitSquash: ORBIT_SQUASH,
                 onAbort: finish,
@@ -373,10 +441,25 @@ export default function Home() {
             };
 
             const run = async () => {
-                // 1. 黑屏中间一个灰色 logo，光标们飞进来围着它转；一个光标把它拖到句子下方
+                // 0. 黑屏中间一个灰色 logo，光标们飞进来围着它转；画布先透明，让页面上的提示文字露出来。
+                //    等访客点击 logo（或按 Enter / 空格）
                 s.orbit(true);
+                s.reveal();
                 s.logoShow(center);
-                await step(s.gather(1500));
+                setPrompt(true);
+                onKey = (e: KeyboardEvent) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        s.pressLogo();
+                    }
+                };
+                window.addEventListener("keydown", onKey);
+                await step(s.logoClick());
+                window.removeEventListener("keydown", onKey);
+                setPrompt(false);
+                await step(wait(0.9)); // 冲击波散开、光标重新聚拢
+
+                // 1. 一个光标把 logo 拖到句子下方
                 await step(s.logoDrag(parked));
 
                 // 2. 光标把整句话一词一词画出来；画完围着 logo 转圈，一个光标去点 Play
@@ -402,17 +485,16 @@ export default function Home() {
                 setPhase("block");
                 await step(wait(FLY_DUR + 0.15));
 
-                // 4. 光标们挪到方框下方转圈；一个光标把 logo 拖到方框里它的位置，再从上往下给它上色
+                // 4. 光标们挪到方框下方转圈；第二轮重建开始，底部进度条弹出。头两个 layer：
+                //    一个光标把 logo 缩小、拖到方框里它的位置，再从上往下给它上色；
+                //    之后光标一个接一个去重建背景视频（黑屏）和方框，标题保持不动
                 s.orbit(nest);
-                await step(s.logoDrag(home));
-                await step(s.logoPaint());
-
-                // 5. 光标一个接一个去干活：重建背景视频（黑屏）和方框，标题和 logo 保持不动
                 await step(s.build({
                     prepare: () => flushSync(() => {
                         setCardShown(true);
                         setStandIn(true);
                     }),
+                    logo: home,
                 }));
                 await step(wait(0.6));
 
@@ -434,6 +516,7 @@ export default function Home() {
             timers.forEach(clearTimeout);
             clearTimeout(resizeT);
             window.removeEventListener("resize", onResize);
+            if (onKey) window.removeEventListener("keydown", onKey);
         };
     }, []);
 
@@ -467,6 +550,8 @@ export default function Home() {
             )}
             {/* 显像管通电的亮线 + 闪烁 */}
             {fx && <div className="crt-flash pointer-events-none fixed inset-0 z-40" aria-hidden="true"/>}
+            {/* 开场：多国语言轮流提示“点击图标” */}
+            <AnimatePresence>{prompt && <ClickPrompt/>}</AnimatePresence>
 
             <main className="relative z-10 grid h-full place-items-center p-4 sm:p-20">
                 {sizes && phase !== "wait" && (

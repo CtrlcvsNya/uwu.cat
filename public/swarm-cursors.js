@@ -40,17 +40,21 @@
  * with a blank canvas and keeps one crew of cursors for a whole scripted intro; it
  * returns null if it could not start. The cursors ignore the visitor's pointer.
  *   opts: { logo: { svg, color, glow }, crew (default 7), orbitScale, orbitSquash,
- *           playDelay, onAbort() }
+ *           builds (how many s.build() calls, so only the last one ends on the
+ *           big chord), playDelay, onAbort() }
  *         onAbort runs when the visitor presses Esc / ✕ (the overlay is gone).
  *   s.gather(ms)        wait while the cursors fly in
- *   s.logoShow({x,y,size})   a grey logo sprite (viewport px), like the favicon intro
+ *   s.logoShow(() => ({x,y,size}))   a grey logo sprite (viewport px), like the favicon intro
+ *   s.logoClick()       the logo turns into a button; resolves when clicked (s.pressLogo()
+ *                       does the same from code, e.g. for Enter / Space)
  *   s.logoDrag(() => ({x,y,size}))  a cursor drags it there (resizing on the way)
  *   s.logoPaint()       a cursor colours it in, top to bottom
  *   s.orbit(true | () => ({x, y}))  idle cursors circle the logo / that point
  *   s.tap(() => ({x, y}))  a cursor pats that spot; resolves on the pat
- *   s.build({prepare})  covers the page, calls prepare() synchronously (render what
- *                       should be rebuilt, e.g. with flushSync), snapshots it and
- *                       builds it; resolves when built
+ *   s.build({prepare, logo})  covers the page, calls prepare() synchronously (render
+ *                       what should be rebuilt, e.g. with flushSync), snapshots it and
+ *                       builds it; resolves when built. With logo: () => ({x,y,size}),
+ *                       moving the logo there and painting it are its first two layers
  *   s.clickPlay()       a cursor clicks a Play button in the bar; resolves on the click
  *   s.reveal()          the canvas turns transparent (live page shows, cursors stay)
  *   s.relayout()        call after the page re-laid itself out (window resized):
@@ -137,6 +141,7 @@
     ibeam: [12, 12],
     ew: [12, 12],
     ns: [12, 12],
+    nwse: [12, 12],
   };
 
   function cursorSVG(shape, c) {
@@ -182,8 +187,9 @@
       }
       case "ew":
       case "ns":
+      case "nwse":
         return `<path d="M2.5 12 L7 7.5 V10.4 H17 V7.5 L21.5 12 L17 16.5 V13.6 H7 V16.5 Z"${
-          shape === "ns" ? ' transform="rotate(90 12 12)"' : ""
+          shape === "ns" ? ' transform="rotate(90 12 12)"' : shape === "nwse" ? ' transform="rotate(45 12 12)"' : ""
         } fill="${c}" ${st}/>`;
     }
     return "";
@@ -1625,6 +1631,18 @@
 .logo>i{position:absolute;inset:0;display:block}
 .logo>i>svg{display:block;width:100%;height:100%;overflow:visible}
 .logo>.g{color:#D7DADE;opacity:.42}
+.logo::before,.logo::after{content:"";position:absolute;left:50%;top:50%;width:100%;height:100%;border-radius:50%;pointer-events:none;opacity:0;transform:translate(-50%,-50%)}
+.logo.clickable{pointer-events:auto;cursor:pointer}
+.logo.clickable::after{border:1.5px solid rgba(206,255,28,.6);animation:logoping 2.2s cubic-bezier(.2,.7,.3,1) infinite}
+@keyframes logoping{0%{opacity:.85;transform:translate(-50%,-50%) scale(.95)}70%,100%{opacity:0;transform:translate(-50%,-50%) scale(2.5)}}
+.logo>i{transition:transform .3s cubic-bezier(.2,.8,.2,1),opacity .3s ease}
+.logo.clickable:hover>i{transform:scale(1.1)}
+.logo.clickable:hover>.g{opacity:.75}
+.logo.burst::before{background:radial-gradient(circle,rgba(206,255,28,.5) 0%,rgba(206,255,28,.12) 40%,rgba(206,255,28,0) 70%);animation:logoburst .9s cubic-bezier(.12,.7,.3,1) both}
+.logo.burst::after{border:2px solid rgba(206,255,28,.8);animation:logoring .8s cubic-bezier(.12,.7,.3,1) both}
+@keyframes logoburst{0%{opacity:1;transform:translate(-50%,-50%) scale(.5)}100%{opacity:0;transform:translate(-50%,-50%) scale(7)}}
+@keyframes logoring{0%{opacity:1;transform:translate(-50%,-50%) scale(1)}100%{opacity:0;transform:translate(-50%,-50%) scale(5)}}
+.logo.burst>.g{opacity:.9;transition:opacity .15s}
 .intro img{display:block;width:60px;height:60px;object-fit:contain;filter:grayscale(1);opacity:.42;border-radius:14px}
 .intro .mono{width:60px;height:60px;border-radius:16px;background:#D7DADE;color:#fff;font:700 30px/60px Inter,system-ui,sans-serif;text-align:center}
 .hud{position:absolute;left:50%;bottom:20px;transform:translate(-50%,18px);opacity:0;display:flex;align-items:center;gap:10px;padding:6px 6px 6px 10px;background:rgba(30,30,30,.94);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);color:#fff;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.28),inset 0 0 0 1px rgba(255,255,255,.07);font:500 12px/1 Inter,system-ui,-apple-system,"Segoe UI",sans-serif;pointer-events:auto;transition:opacity .45s ease,transform .45s cubic-bezier(.2,.8,.2,1);white-space:nowrap;user-select:none;z-index:5;max-width:calc(100vw - 24px);box-sizing:border-box}
@@ -2291,7 +2309,7 @@
         }
         for (const c of this.cursors) {
           if (!quiet) c.worked = false;
-          if (c.solo || c.leaving) continue;
+          if (c.solo || c.leaving || c.task) continue; // (relayout: a scripted job keeps running)
           c.follow = this.idleOrbit;
           c.gen = null;
           c.ov = null;
@@ -2646,6 +2664,18 @@
       this.follow(dt, this.cursors.filter((c) => !c.solo), null, this.orbitScale, this.orbitSquash);
     }
 
+    // push every cursor away from o (session mode: the logo was clicked)
+    kick(o, strength) {
+      for (const c of this.cursors) {
+        const dx = c.x - o.x;
+        const dy = c.y - o.y;
+        const d = Math.hypot(dx, dy) || 1;
+        const k = strength * (0.75 + Math.random() * 0.5);
+        c.vx += (dx / d) * k;
+        c.vy += (dy / d) * k;
+      }
+    }
+
     // Session mode: a "solo" cursor runs its own script (drag the logo, click Play...)
     // while the others build or flock; afterwards it rejoins them.
     stepSolo(dt) {
@@ -2919,6 +2949,8 @@
           return this.dragGuide(c, s.g);
         case "dup":
           return this.duplicate(c, s.g, s.k);
+        case "script": // session mode: a scripted job counted as a layer (e.g. moving the logo)
+          return s.run(c);
         case "edit":
           return this.editText(c, s.it);
         case "restyle":
@@ -3669,20 +3701,31 @@
       }
     }
 
-    // the swarm fans out: E G# B E arpeggio on the grid
+    // the swarm fans out: E G# B E arpeggio on the grid. A second build in the same
+    // session answers with its own figure (B E F# B C# E) instead of repeating it.
     start() {
       this.log("start", []);
+      const n = (this.starts = (this.starts || 0) + 1);
       if (!this.ready()) return;
       const { when } = this.grid(4);
       const step = 60 / this.bpm / 4;
-      [E2 + 24, E2 + 28, E2 + 31, E2 + 36, E2 + 40].forEach((m, i) => this.piano(m, when + i * step, 0.2, -0.5 + i * 0.25, 2));
+      const notes = n === 1 ? [E2 + 24, E2 + 28, E2 + 31, E2 + 36, E2 + 40] : [E2 + 19, E2 + 24, E2 + 26, E2 + 31, E2 + 33, E2 + 36];
+      notes.forEach((m, i) => this.piano(m, when + i * step, 0.2, -0.5 + (i / (notes.length - 1)) * 1, 2));
     }
 
-    // the last chord rings: E major add9, strummed
-    finale() {
-      this.log("finale", []);
+    // the last chord rings: E major add9, strummed. In a session with more builds
+    // to come (opts.finales), the earlier ones stop on an open B sus2 instead, a
+    // "to be continued" that the final E major then resolves.
+    finale(last = true) {
+      this.log("finale", [last]);
       if (!this.ready()) return;
       const { when } = this.grid(2);
+      if (!last) {
+        const chord = [E2 + 7, E2 + 14, E2 + 19, E2 + 21, E2 + 26, E2 + 31, E2 + 33];
+        chord.forEach((m, i) => this.piano(m, when + i * 0.045, 0.28 - i * 0.015, -0.5 + (i / chord.length) * 1, 3.8));
+        this.pad(E2 + 19, when, 0.035, 3.5);
+        return;
+      }
       const chord = [E2, E2 + 7, E2 + 12, E2 + 16, E2 + 19, E2 + 26, E2 + 28, E2 + 31, E2 + 36, E2 + 43];
       chord.forEach((m, i) => this.piano(m, when + i * 0.035, 0.34 - i * 0.015, -0.6 + (i / chord.length) * 1.2, 5.5));
       this.pad(E2 + 12, when, 0.05, 5);
@@ -4050,7 +4093,8 @@
 
     onComplete() {
       this.complete = true;
-      if (this.sfx) this.sfx.finale();
+      // session: only the last of opts.builds resolves to the big chord
+      if (this.sfx) this.sfx.finale(!this.opts || (this.buildNo || 1) >= (this.opts.builds || 1));
       const E = this.engine;
       const v = this.view;
       const workers = E.cursors.filter((c) => c.worked).length + E.retired;
@@ -4105,7 +4149,6 @@
       nextFrame().then(() => {
         if (this.dead) return;
         this.renderSoundBtn();
-        this.sfx.intro();
       });
     }
 
@@ -4152,8 +4195,10 @@
         console.error("[swarm-rebuild] capture failed", err);
         model = { items: [], tasks: [], groups: [], guides: [], docW: 0, docH: 0 };
       }
+      if (o && o.logo && this.logo) this.addLogoJobs(model, o.logo);
       v.unmount();
       v.mount(model);
+      this.buildNo = (this.buildNo || 0) + 1;
       E.setModel(model);
       this.model = model;
       v.render(E);
@@ -4167,6 +4212,18 @@
         this._built = resolve;
         if (!E.started) E.start();
       });
+    }
+
+    // Moving the logo into place and painting it become the first two layers of a
+    // build: the bar counts them, and nothing else starts until the logo is done.
+    addLogoJobs(model, getTo) {
+      const L = this.logo;
+      const job = (run, deps) => ({ id: 0, y: L.y, spec: { type: "script", run }, deps, state: "wait", doneAt: 0, layer: "world", gate: 0 });
+      const move = job((c) => this.grabLogo(c, getTo, () => {}), []);
+      const paint = job((c) => this.paintLogo(c, () => {}), [move]);
+      for (const t of model.tasks) t.deps = [...t.deps, paint];
+      model.tasks = [move, paint, ...model.tasks];
+      model.tasks.forEach((t, i) => (t.id = i));
     }
 
     // The page changed size mid-build: snapshot it again in its new layout. Pieces that
@@ -4187,7 +4244,16 @@
       const built = new Map();
       for (const it of this.model.items) if (it.done && it.vis) built.set(it.srcKey, it);
       const was = (it) => built.has(it.srcKey) || it.keep;
+      // scripted jobs (moving the logo...) aren't part of the snapshot: carry them over
+      const scripts = this.model.tasks.filter((t) => t.spec.type === "script");
+      if (scripts.length) {
+        const last = scripts[scripts.length - 1];
+        if (last.state !== "done") for (const t of m.tasks) t.deps = [...t.deps, last];
+        m.tasks = [...scripts, ...m.tasks];
+        m.tasks.forEach((t, i) => (t.id = i));
+      }
       for (const t of m.tasks) {
+        if (t.spec.type === "script") continue;
         const s = t.spec;
         const its = s.type === "dup" ? s.g.dst[s.k].items : s.it ? [s.it] : [];
         if (its.length && its.every(was)) {
@@ -4196,7 +4262,7 @@
         }
       }
       for (const c of E.cursors) {
-        if (!c.task) continue;
+        if (!c.task || c.task.spec.type === "script") continue;
         c.task = null;
         c.gen = null;
         c.ov = null;
@@ -4213,7 +4279,7 @@
       v.mount(m);
       E.setModel(m, true);
       E.waitCount = m.tasks.filter((t) => t.state === "wait").length;
-      E.doneCount = m.tasks.length - E.waitCount;
+      E.doneCount = m.tasks.filter((t) => t.state === "done").length;
       for (const it of m.items) {
         if (!built.has(it.srcKey)) continue;
         it.vis = true;
@@ -4394,6 +4460,54 @@
       c.style.clipPath = L.paint >= 1 ? `inset(-${pad}px)` : `inset(-${pad}px -${pad}px ${f1((1 - L.paint) * L.size)}px -${pad}px)`;
     }
 
+    // The logo becomes a button (pulsing ring, hover); resolves when it's clicked or
+    // pressLogo() is called. The click pops it, sends a shockwave through the swarm and
+    // starts the sound (the click is what lets the browser play it).
+    logoClick() {
+      if (this.dead || !this.logo) return this.pending();
+      const E = this.engine;
+      const el = this.view.logo;
+      el.classList.add("clickable");
+      el.setAttribute("role", "button");
+      el.setAttribute("aria-label", "Start");
+      return new Promise((resolve) => {
+        let done = false;
+        const go = (e) => {
+          if (done || this.dead) return;
+          done = true;
+          if (e && e.stopPropagation) e.stopPropagation();
+          el.removeEventListener("click", go);
+          this._logoGo = null;
+          el.classList.remove("clickable");
+          el.classList.add("burst");
+          setTimeout(() => el.classList.remove("burst"), 950);
+          const L = this.logo;
+          L.popT = 0;
+          E.kick(E.fromViewport(L.x, L.y), 1100);
+          const sfx = this.sfx;
+          if (sfx && sfx.ctx) {
+            const ready = sfx.ctx.state === "running" ? Promise.resolve() : sfx.ctx.resume();
+            ready
+              .then(() => {
+                if (this.dead) return;
+                sfx.press(L.x, E.vp.vw);
+                sfx.boop(L.x, E.vp.vw);
+                sfx.intro();
+                this.renderSoundBtn();
+              })
+              .catch(() => {});
+          }
+          resolve();
+        };
+        el.addEventListener("click", go);
+        this._logoGo = go;
+      });
+    }
+
+    pressLogo() {
+      if (this._logoGo) this._logoGo();
+    }
+
     // a cursor grabs the logo and drags it to getTo() = {x, y, size} (viewport px)
     logoDrag(getTo) {
       if (this.dead || !this.logo) return this.pending();
@@ -4414,12 +4528,23 @@
       const L = this.logo;
       const W = (x, y) => E.fromViewport(x, y);
       c.shape = "arrow";
-      const hold = { x: L.size * 0.14, y: L.size * 0.08 }; // where the cursor grabs it
+      let hold = { x: L.size * 0.14, y: L.size * 0.08 }; // where the cursor grabs it
       yield* E.moveTo(c, () => W(L.x + hold.x, L.y + hold.y), { speed: 0.55 });
       c.press = 1;
       if (this.sfx) this.sfx.press(E.scr(c).x, E.vp.vw);
       c.ov = () => [this.logoBox()];
       yield* E.wait(0.45);
+      // a clearly different size: resize it by its corner handle first, then move it
+      const want = getTo().size;
+      if (Math.abs(want - L.size) > 6) {
+        this.logoBusy = true;
+        yield* this.resizeLogo(c, want);
+        hold = { x: L.size * 0.14, y: L.size * 0.08 };
+        yield* E.moveTo(c, () => W(L.x + hold.x, L.y + hold.y), { speed: 0.7 });
+        c.press = 1;
+        if (this.sfx) this.sfx.press(E.scr(c).x, E.vp.vw);
+        yield* E.wait(0.25);
+      }
       const from = { size: L.size };
       const end = () => {
         const t = getTo();
@@ -4451,6 +4576,45 @@
       yield* E.wait(0.4);
       c.ov = null;
       done();
+    }
+
+    // drag the bottom-right handle until the logo is `size` (top-left corner stays put)
+    *resizeLogo(c, size) {
+      const E = this.engine;
+      const L = this.logo;
+      const W = (x, y) => E.fromViewport(x, y);
+      const tl = { x: L.x - L.size / 2, y: L.y - L.size / 2 };
+      const from = L.size;
+      const lo = Math.min(from, size);
+      const hi = Math.max(from, size);
+      c.shape = "arrow";
+      yield* E.moveTo(c, () => W(tl.x + L.size, tl.y + L.size), { speed: 0.75 });
+      c.shape = "nwse";
+      yield* E.wait(0.3);
+      c.press = 1;
+      if (this.sfx) this.sfx.press(E.scr(c).x, E.vp.vw);
+      let step = -1;
+      yield* E.moveTo(c, W(tl.x + size, tl.y + size), {
+        speed: 0.42,
+        drag: true,
+        bend: 0,
+        onStep: () => {
+          const p = E.scr(c);
+          const s = clamp(Math.max(p.x - tl.x, p.y - tl.y), lo, hi);
+          L.size = s;
+          L.x = tl.x + s / 2;
+          L.y = tl.y + s / 2;
+          // a soft tick every few pixels, like the size badge counting
+          const k = Math.floor(Math.abs(from - s) / 4);
+          if (k !== step && this.sfx) this.sfx.grow(Math.min(8, k), p.x, E.vp.vw);
+          step = k;
+        },
+      });
+      L.size = size;
+      L.x = tl.x + size / 2;
+      L.y = tl.y + size / 2;
+      c.shape = "arrow";
+      yield* E.wait(0.35);
     }
 
     // a cursor picks the pen and colours the logo in, top to bottom
@@ -4651,6 +4815,8 @@
       logoShow: (o) => a.logoShow(o),
       logoDrag: (getTo) => a.logoDrag(getTo),
       logoPaint: () => a.logoPaint(),
+      logoClick: () => a.logoClick(),
+      pressLogo: () => a.pressLogo(),
       orbit: (target) => a.orbit(target),
       tap: (get) => a.tap(get),
       relayout: () => a.relayout(),
