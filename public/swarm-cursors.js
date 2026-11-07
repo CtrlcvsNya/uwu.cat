@@ -1661,7 +1661,7 @@
 .hud button.pri{background:#0D99FF}
 .hud button.pri:hover{background:#2aa6ff}
 .hud button.on{background:rgba(13,153,255,.22);color:#8fd0ff}
-.hud button[hidden]{display:none}
+.hud button[hidden]{display:none!important}
 .hud button.play{display:inline-flex;align-items:center;gap:6px;transition:background .15s,transform .12s cubic-bezier(.2,.8,.2,1)}
 .hud button.play svg{width:10px;height:10px;display:block}
 .hud button.play.hit{background:#0a7cd1;transform:scale(.93)}
@@ -4392,6 +4392,7 @@
           b.classList.add("hit");
           setTimeout(() => {
             b.hidden = true;
+            b.classList.remove("hit");
             resolve();
           }, 160);
         };

@@ -45,7 +45,7 @@ const TIMELINE: [Phase, number][] = [
 // 3. 页面播放收拢动画：UWU.CAT 放大，一个光标飞过去拍它一下 → 弹出 Nya~ → 飞进方框位置
 // 4. 底部的进度条弹出来：第二轮重建的头两个 layer 是“把 logo 缩小并拖进方框”和“从上往下给它上色”，
 //    做完之后光标再一个接一个离开圈子去干活：重建背景视频（一块黑屏）和方框
-// 6. 全部完成后光标从两边散开离场，然后电视“开机”：一震一闪，视频亮起并开始播放
+// 6. 全部完成后 Play 出现，一个光标按下；光标从两边散开离场，然后电视“开机”：一震一闪，视频亮起并开始播放
 // 光标绕圈是扁椭圆：横向约 ±140px，纵向约 ±70px（ORBIT_* 两个参数）
 type SwarmSession = {
     readonly alive: boolean;
@@ -496,7 +496,8 @@ export default function Home() {
                     }),
                     logo: home,
                 }));
-                await step(wait(0.6));
+                // 和第一段一样：建完才出现 Play，一个光标去按
+                await step(s.clickPlay());
 
                 // 6. 光标从两边散开离场，然后电视开机：一震一闪，视频亮起并开始播放
                 await step(s.leave());
