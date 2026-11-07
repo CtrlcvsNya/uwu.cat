@@ -16,6 +16,8 @@ type Props = {
     src: string;
     /** 为 true 时开始入场扫描动画；之前只渲染黑屏（视频会提前加载） */
     revealed?: boolean;
+    /** 为 false 时视频停在第一帧不播放；变为 true 时从头开始播放 */
+    playing?: boolean;
     /** 入场扫描时长（秒） */
     revealDuration?: number;
     /** 字符宽度（CSS px），高度自动 ×1.6；越小越细腻 */
@@ -261,6 +263,7 @@ function buildAtlas(charset: string, cellW: number, cellH: number, fontFamily: s
 export default function AsciiVideo({
                                        src,
                                        revealed = true,
+                                       playing = true,
                                        revealDuration = 1.8,
                                        cellSize = 7,
                                        charset = DEFAULT_CHARSET,
@@ -272,11 +275,27 @@ export default function AsciiVideo({
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const videoRef = useRef<HTMLVideoElement>(null);
     const revealedRef = useRef(revealed);
+    const playingRef = useRef(playing);
     const [fallback, setFallback] = useState(false);
 
     useEffect(() => {
         revealedRef.current = revealed;
     }, [revealed]);
+
+    // 播放开关：关着时停在开头（黑屏期间不偷偷往后播），打开时从头播放
+    useEffect(() => {
+        const video = videoRef.current;
+        if (!video) return;
+        const was = playingRef.current;
+        playingRef.current = playing;
+        if (playing) {
+            if (!was) video.currentTime = 0;
+            video.play().catch(() => { /* 自动播放被拦截时，首次交互再播放 */ });
+        } else {
+            video.pause();
+            video.currentTime = 0;
+        }
+    }, [playing]);
 
     useEffect(() => {
         const canvas = canvasRef.current!;
@@ -428,12 +447,11 @@ export default function AsciiVideo({
 
         const onMeta = () => updateCover();
         video.addEventListener("loadedmetadata", onMeta);
-        video.play().catch(() => { /* 自动播放被拦截时，首次交互再播放 */ });
 
         // 标签页隐藏时暂停视频，省电
         const onVis = () => {
             if (document.hidden) video.pause();
-            else video.play().catch(() => {});
+            else if (playingRef.current) video.play().catch(() => {});
         };
         document.addEventListener("visibilitychange", onVis);
 
@@ -457,7 +475,7 @@ export default function AsciiVideo({
             ripples[k + 1] = e.clientY * dpr;
             ripples[k + 2] = now();
             rippleIdx = (rippleIdx + 1) % MAX_RIPPLES;
-            if (video.paused) video.play().catch(() => {});
+            if (video.paused && playingRef.current) video.play().catch(() => {});
         };
         window.addEventListener("pointermove", onMove, {passive: true});
         window.addEventListener("pointerdown", onDown, {passive: true});
@@ -546,7 +564,6 @@ export default function AsciiVideo({
                 muted
                 loop
                 playsInline
-                autoPlay
                 preload="auto"
                 crossOrigin="anonymous"
                 style={fallback

@@ -1,6 +1,8 @@
 "use client";
 import {motion, LayoutGroup, type Transition} from "motion/react";
-import {useEffect, useState} from "react";
+import {useEffect, useRef, useState} from "react";
+import {flushSync} from "react-dom";
+import Script from "next/script";
 import AsciiVideo from "@/app/components/AsciiVideo";
 
 const sentence = "Uplift With Uniqueness . Cats Always Touch";
@@ -26,13 +28,76 @@ const FLY_DUR = 1.05;        // 大标题 → 方框内小标题
 const TOTAL_IN = (words.length - 1) * IN_STAGGER + IN_DUR;
 const TOTAL_COLLAPSE = (words.length - 1) * COLLAPSE_STAGGER + COLLAPSE_DUR;
 
-type Phase = "in" | "collapse" | "title" | "block";
+type Phase = "wait" | "in" | "collapse" | "title" | "block";
 
 const TIMELINE: [Phase, number][] = [
     ["collapse", TOTAL_IN + HOLD],
     ["title", TOTAL_IN + HOLD + TOTAL_COLLAPSE - 0.2],
     ["block", TOTAL_IN + HOLD + TOTAL_COLLAPSE - 0.2 + GROW_DUR + TITLE_HOLD],
 ];
+
+// ---------------- Swarm 开场（public/swarm-cursors.js 的 session 模式） ----------------
+// 同一群光标从头陪到尾：
+// 1. 黑屏中间是灰色的 logo，一个光标把它拖到那句话下方（够低，光标绕着它转圈时不挡字）
+// 2. 光标把整句话画出来，画完后围着 logo 转圈，一个光标去点底部的 Play
+// 3. 页面播放收拢动画：UWU.CAT 放大，一个光标飞过去拍它一下 → 弹出 Nya~ → 飞进方框位置
+// 4. 光标们挪到方框下方转圈；一个光标把 logo 拖到方框里它该在的位置，再拿笔从上往下给它上色
+// 5. 光标一个接一个离开圈子去干活：重建背景视频（一块黑屏）和方框
+// 6. 全部完成后光标从两边散开离场，然后电视“开机”：一震一闪，视频亮起并开始播放
+// 光标绕圈是扁椭圆：横向约 ±140px，纵向约 ±70px（ORBIT_* 两个参数）
+type SwarmSession = {
+    readonly alive: boolean;
+    gather(ms: number): Promise<void>;
+    logoShow(o: { x: number; y: number; size: number }): void;
+    logoDrag(getTo: () => { x: number; y: number; size: number }): Promise<void>;
+    logoPaint(): Promise<void>;
+    orbit(target: boolean | (() => { x: number; y: number })): void;
+    tap(get: () => { x: number; y: number }): Promise<void>;
+    build(o: { prepare: () => void }): Promise<void>;
+    clickPlay(): Promise<void>;
+    reveal(): void;
+    leave(): Promise<void>;
+    close(): void;
+};
+type SwarmSessionOpts = {
+    logo: { svg: string; color: string; glow?: string };
+    crew?: number;
+    orbitScale?: number;
+    orbitSquash?: number;
+    onAbort?: () => void;
+};
+type StartSession = (opts: SwarmSessionOpts) => SwarmSession | null;
+
+declare global {
+    interface Window {
+        SwarmCursors?: { session?: StartSession };
+    }
+}
+
+/** 等 swarm 脚本加载好；超时（或被 CSP 拦掉）就返回 null，走普通动画开场 */
+function waitForSwarm(ms: number) {
+    return new Promise<StartSession | null>((resolve) => {
+        const t0 = performance.now();
+        const tick = () => {
+            const session = window.SwarmCursors?.session;
+            if (session) return resolve(session);
+            if (performance.now() - t0 > ms) return resolve(null);
+            setTimeout(tick, 50);
+        };
+        tick();
+    });
+}
+
+const SWARM_CREW = 9;         // 光标数量
+const ORBIT_SCALE = 0.6;      // 绕圈大小
+const ORBIT_SQUASH = 0.5;     // 绕圈压扁程度（纵向 / 横向）
+const ORBIT_HALF_H = 80;      // 椭圆纵向半径 + 光标本身的高度，用来算 logo 要放多低才不挡字
+const LOGO_INTRO_SIZE = 60;   // 开场时屏幕中间 logo 的大小（和原来的 favicon 开场一样）
+const LOGO_PARKED_SIZE = 52;  // 停在句子下方时的大小
+
+// 第二轮里背景视频的替身：一张黑图，光标会把它当成一块媒体框画出来（所以“视频一开始是黑的”）
+const BLACK_SCREEN =
+    "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9' preserveAspectRatio='none'%3E%3Crect width='16' height='9'/%3E%3C/svg%3E";
 
 // 按词拆“首字母/其余”，首字母连起来正好是 UWU.CAT
 type Split = { pre: string; first: string; post: string };
@@ -64,9 +129,19 @@ function measureAt100(text: string) {
     return width;
 }
 
-/** 内容块里各元素的统一入场：上浮 + 去模糊 */
-const fadeUp = (delay: number) => ({
-    initial: {opacity: 0, y: 8, filter: "blur(6px)"},
+/**
+ * 首字母和后半截分成两个盒子后，字体里这两个字之间的字距调整（kerning）就没了，
+ * 比如 “To” 本来挨得很紧，拆开后 “ouch” 会往右挪一点。量出这个差值（em），
+ * 加回到后半截的 margin-left 上，拆字版就和整词版逐像素对齐（swarm 交接时不会抽一下）。
+ */
+function kernAfterFirst({first, post}: Split) {
+    if (!post) return 0;
+    return (measureAt100(first + post) - measureAt100(first) - measureAt100(post)) / 100;
+}
+
+/** 内容块里各元素的统一入场：上浮 + 去模糊（swarm 开场时直接是最终状态，由光标画出来） */
+const fadeUp = (delay: number, animated = true) => ({
+    initial: animated ? {opacity: 0, y: 8, filter: "blur(6px)"} : false,
     animate: {opacity: 1, y: 0, filter: "blur(0px)"},
     transition: {duration: 0.7, ease: EASE_OUT, delay} satisfies Transition,
 });
@@ -74,15 +149,18 @@ const fadeUp = (delay: number) => ({
 // ---------------- 小组件 ----------------
 
 /** 非首字母部分：宽度收为 0，首字母自然向中间滑拢 */
-function Rest({text, idx, collapsed}: { text: string; idx: number; collapsed: boolean }) {
+function Rest({text, idx, collapsed, animated, kern = 0}: {
+    text: string; idx: number; collapsed: boolean; animated: boolean; kern?: number;
+}) {
     if (!text) return null;
     return (
         <motion.span
             className="inline-block overflow-hidden whitespace-nowrap align-bottom title-ink"
-            initial={{opacity: 0, y: 24, filter: "blur(10px)"}}
+            initial={animated ? {opacity: 0, y: 24, filter: "blur(10px)"} : false}
+            // kern：把首字母和后半截之间的字距调整补回来（见 kernAfterFirst），收拢时一起归零
             animate={collapsed
-                ? {opacity: 0, y: -6, filter: "blur(6px)", width: 0}
-                : {opacity: 1, y: 0, filter: "blur(0px)", width: "auto"}}
+                ? {opacity: 0, y: -6, filter: "blur(6px)", width: 0, marginLeft: "0em"}
+                : {opacity: 1, y: 0, filter: "blur(0px)", width: "auto", marginLeft: `${kern}em`}}
             transition={collapsed
                 ? {duration: COLLAPSE_DUR, ease: EASE_IN_OUT, delay: idx * COLLAPSE_STAGGER}
                 : {duration: IN_DUR, ease: EASE_OUT, delay: idx * IN_STAGGER}}
@@ -92,16 +170,39 @@ function Rest({text, idx, collapsed}: { text: string; idx: number; collapsed: bo
     );
 }
 
+/**
+ * 第一轮 swarm 拍快照用的整句：每个词是一整段文字，光标按词来敲（而不是 “U” + “plift” 分开敲）。
+ * 排版和下面拆成首字母的版本一致，点下 Play 的那一刻无缝换成拆字版再开始收拢。
+ */
+const WordsLine = ({fontSize}: { fontSize: number }) => (
+    <div className="relative flex flex-wrap justify-center items-end font-bold" style={{fontSize}}>
+        {words.map((w, idx) => (
+            <span key={idx} className="inline-flex items-end leading-[1.25]">
+                {idx > 0 && <span className="inline-block" style={{width: "0.3em"}}/>}
+                <span className="inline-block whitespace-nowrap title-ink">{w}</span>
+            </span>
+        ))}
+    </div>
+);
+
+const LOGO_POINTS =
+    "91.08,49.15 122.88,49.15 122.88,73.73 91.08,73.73 113.58,96.23 96.15,113.58 73.73,91.08 73.73,122.88 49.15,122.88 49.15,91.08 26.64,113.58 9.3,96.23 31.72,73.73 0,73.73 0,49.15 31.72,49.15 9.3,26.73 26.64,9.3 49.15,31.72 49.15,0 73.73,0 73.73,31.72 96.24,9.3 113.58,26.64 91.08,49.15";
+// swarm 里被光标拖来拖去、上色的那个 logo：和下面的 <Logo/> 同形同色同光晕，最后无缝换成真的
+const LOGO_SWARM = {
+    svg: `<svg viewBox="0 0 123 123" fill="currentColor"><polygon points="${LOGO_POINTS}"/></svg>`,
+    color: "#ceff1c",
+    glow: "drop-shadow(0 0 12px rgba(206,255,28,0.45))",
+};
+
 const Logo = () => (
     <svg viewBox="0 0 123 123" aria-hidden="true" fill="currentColor"
          className="w-8 h-8 md:w-10 md:h-10 text-accent drop-shadow-[0_0_12px_rgba(206,255,28,0.45)]">
-        <polygon
-            points="91.08,49.15 122.88,49.15 122.88,73.73 91.08,73.73 113.58,96.23 96.15,113.58 73.73,91.08 73.73,122.88 49.15,122.88 49.15,91.08 26.64,113.58 9.3,96.23 31.72,73.73 0,73.73 0,49.15 31.72,49.15 9.3,26.73 26.64,9.3 49.15,31.72 49.15,0 73.73,0 73.73,31.72 96.24,9.3 113.58,26.64 91.08,49.15"/>
+        <polygon points={LOGO_POINTS}/>
     </svg>
 );
 
 /** 大标题右上角弹出的 Nya~：弹性冒出 → 轻微晃动 → 下沉模糊消失（整体向右下倾斜） */
-const Nya = () => (
+const Nya = ({delay = NYA_DELAY}: { delay?: number }) => (
     // 外层负责定位（字号用 em，跟随标题一起放大），内层负责动画
     <span
         className="pointer-events-none absolute right-0 top-0 translate-x-[40%] -translate-y-[60%]"
@@ -118,7 +219,7 @@ const Nya = () => (
                 y: [-8, 0, 0, 0, 12],
                 filter: ["blur(4px)", "blur(0px)", "blur(0px)", "blur(0px)", "blur(4px)"],
             }}
-            transition={{duration: NYA_DUR, delay: NYA_DELAY, times: [0, 0.18, 0.3, 0.76, 1], ease: "easeOut"}}
+            transition={{duration: NYA_DUR, delay, times: [0, 0.18, 0.3, 0.76, 1], ease: "easeOut"}}
         >
             Nya~
         </motion.span>
@@ -143,29 +244,158 @@ const CORNERS = [
 // ---------------- 页面 ----------------
 
 export default function Home() {
-    const [phase, setPhase] = useState<Phase>("in");
-    const [sizes, setSizes] = useState<{ small: number; big: number } | null>(null);
+    const [phase, setPhase] = useState<Phase>("wait");
+    const [sizes, setSizes] = useState<{ small: number; big: number; kerns: number[] } | null>(null);
+    // null = 还没决定；true = swarm 开场（元素都是静态的，由光标画出来）；false = 普通动画开场
+    const [swarm, setSwarm] = useState<boolean | null>(null);
+    const [wordsOnly, setWordsOnly] = useState(false); // 第一轮快照：整句按整词排
+    const [cardShown, setCardShown] = useState(false); // 方框（标题以外的部分）是否可见
+    const [standIn, setStandIn] = useState(false);     // 第二轮快照：背景视频的黑屏替身
+    const [tvOn, setTvOn] = useState(false);           // 全部完成后：电视开机，视频亮起并播放
+    const [nya, setNya] = useState(false);             // swarm：光标拍了 UWU.CAT 一下 → Nya~
+    const logoRef = useRef<HTMLDivElement>(null);      // 方框里的真 logo（swarm 把 logo 拖到这里）
+    const titleRef = useRef<HTMLDivElement>(null);     // 收拢/放大中的标题（光标去拍它）
+    const cardRef = useRef<HTMLDivElement>(null);      // 方框（第二阶段光标在它下方转圈）
 
     useEffect(() => {
         let cancelled = false;
-        let timers: ReturnType<typeof setTimeout>[] = [];
+        let aborted = false;
+        const timers: ReturnType<typeof setTimeout>[] = [];
+        const at = (s: number, fn: () => void) => {
+            timers.push(setTimeout(fn, s * 1000));
+        };
+        const wait = (s: number) => new Promise<void>((resolve) => at(s, resolve));
+        // 每一步之后检查：被跳过（Esc / ✕）或组件卸载就停下
+        const STOP = Symbol("stop");
+        const step = async <T, >(p: Promise<T>) => {
+            const v = await p;
+            if (aborted || cancelled) throw STOP;
+            return v;
+        };
 
         // 等字体加载完，按真实字宽算字号，保证整句和 UWU.CAT 在任何屏幕上都不换行
         // 自定义字体是按需加载的，显式 load 一次再量，避免量到回退字体
         const fontsReady = document.fonts
             ? document.fonts.load('700 100px "MyFont"', TITLE).then(() => document.fonts.ready)
             : Promise.resolve();
-        fontsReady.catch(() => undefined).then(() => {
+        Promise.all([fontsReady.catch(() => undefined), waitForSwarm(4000)]).then(([, startSession]) => {
             if (cancelled) return;
-            const w = window.innerWidth;
-            const avail = w - (w >= 640 ? 160 : 32); // 减去 main 的左右 padding（p-4 / sm:p-20）
-            setSizes({
-                // 整句必须一行放下（换行会在收拢时跳行），手机上会比较小
-                small: clamp((avail * 0.94) / (measureAt100(sentence) / 100), 11, 40),
-                // 手机上不撑满屏幕（太压迫），只占 65% 宽；桌面最大 120px
-                big: clamp((avail * (w < 640 ? 0.65 : 0.9)) / (measureAt100(TITLE) / 100), 32, 120),
+            const W = window.innerWidth;
+            const H = window.innerHeight;
+            const avail = W - (W >= 640 ? 160 : 32); // 减去 main 的左右 padding（p-4 / sm:p-20）
+            // 整句必须一行放下（换行会在收拢时跳行），手机上会比较小
+            const small = clamp((avail * 0.94) / (measureAt100(sentence) / 100), 11, 40);
+            // 手机上不撑满屏幕（太压迫），只占 65% 宽；桌面最大 120px
+            const big = clamp((avail * (W < 640 ? 0.65 : 0.9)) / (measureAt100(TITLE) / 100), 32, 120);
+            setSizes({small, big, kerns: splits.map(kernAfterFirst)});
+
+            // 普通动画开场（swarm 脚本没加载到 / 被 CSP 拦截）
+            const plain = () => {
+                setSwarm(false);
+                setCardShown(true);
+                setPhase("in");
+                TIMELINE.forEach(([p, t]) => at(t, () => setPhase(p)));
+            };
+            if (!startSession) return plain();
+
+            // 按 Esc / ✕ 跳过：直接到最终画面
+            const finish = () => {
+                aborted = true;
+                timers.forEach(clearTimeout);
+                setWordsOnly(false);
+                setPhase("block");
+                setCardShown(true);
+                setStandIn(false);
+                setTvOn(true);
+            };
+
+            const s = startSession({
+                logo: LOGO_SWARM,
+                crew: SWARM_CREW,
+                orbitScale: ORBIT_SCALE,
+                orbitSquash: ORBIT_SQUASH,
+                onAbort: finish,
             });
-            timers = TIMELINE.map(([p, t]) => setTimeout(() => setPhase(p), t * 1000));
+            if (!s) return plain();
+            setSwarm(true);
+
+            // logo 停在句子下方，低到光标绕着它转圈时碰不到之后放大的 UWU.CAT（行高 1.25），
+            // 又不压到底部的控制条（约 64px 高）
+            const parkedY = Math.min(H / 2 + big * 0.625 + ORBIT_HALF_H + 14, H - ORBIT_HALF_H - 64);
+            const parked = {x: W / 2, y: parkedY, size: LOGO_PARKED_SIZE};
+            // 第二阶段光标在方框下方转圈，不挡方框里的字
+            const nest = () => {
+                const r = cardRef.current?.getBoundingClientRect();
+                if (!r) return parked;
+                return {x: r.left + r.width / 2, y: Math.min(r.bottom + ORBIT_HALF_H + 10, H - ORBIT_HALF_H - 64)};
+            };
+            // 方框里真 logo 的位置和大小（方框隐藏时也已经排好版）
+            const home = () => {
+                const r = logoRef.current?.querySelector("svg")?.getBoundingClientRect();
+                return r ? {x: r.left + r.width / 2, y: r.top + r.height / 2, size: r.width} : parked;
+            };
+            // 光标拍 UWU.CAT 的位置：右半边、偏上（Nya~ 从右上角冒出来）
+            const titleSpot = () => {
+                const r = titleRef.current?.getBoundingClientRect();
+                return r ? {x: r.right - r.width * 0.16, y: r.top + r.height * 0.45} : {x: W / 2, y: H / 2};
+            };
+
+            const run = async () => {
+                // 1. 黑屏中间一个灰色 logo，光标们飞进来围着它转；一个光标把它拖到句子下方
+                s.orbit(true);
+                s.logoShow({x: W / 2, y: H / 2, size: LOGO_INTRO_SIZE});
+                await step(s.gather(1500));
+                await step(s.logoDrag(() => parked));
+
+                // 2. 光标把整句话一词一词画出来；画完围着 logo 转圈，一个光标去点 Play
+                await step(s.build({
+                    prepare: () => flushSync(() => {
+                        setPhase("in");
+                        setWordsOnly(true);
+                    }),
+                }));
+                await step(s.clickPlay());
+
+                // 3. 画布变透明，页面播放收拢动画：UWU.CAT 放大 → 光标拍它一下弹出 Nya~ → 飞进方框位置
+                s.reveal();
+                flushSync(() => setWordsOnly(false));
+                await step(wait(0.25));
+                setPhase("collapse");
+                await step(wait(TOTAL_COLLAPSE - 0.2));
+                setPhase("title");
+                await step(wait(GROW_DUR * 0.8));
+                await step(s.tap(titleSpot));
+                setNya(true);
+                await step(wait(NYA_DUR + 0.1));
+                setPhase("block");
+                await step(wait(FLY_DUR + 0.15));
+
+                // 4. 光标们挪到方框下方转圈；一个光标把 logo 拖到方框里它的位置，再从上往下给它上色
+                s.orbit(nest);
+                await step(s.logoDrag(home));
+                await step(s.logoPaint());
+
+                // 5. 光标一个接一个去干活：重建背景视频（黑屏）和方框，标题和 logo 保持不动
+                await step(s.build({
+                    prepare: () => flushSync(() => {
+                        setCardShown(true);
+                        setStandIn(true);
+                    }),
+                }));
+                await step(wait(0.6));
+
+                // 6. 光标从两边散开离场，然后电视开机：一震一闪，视频亮起并开始播放
+                await step(s.leave());
+                await step(wait(0.2));
+                s.close();
+                flushSync(() => {
+                    setStandIn(false);
+                    setTvOn(true);
+                });
+            };
+            run().catch((err) => {
+                if (err !== STOP) console.error(err);
+            });
         });
         return () => {
             cancelled = true;
@@ -173,64 +403,88 @@ export default function Home() {
         };
     }, []);
 
-    const collapsed = phase !== "in";
+    const animated = swarm === false;               // 普通开场：各元素自己做入场动画
+    const collapsed = phase !== "wait" && phase !== "in";
+    const tv = animated ? phase === "block" : tvOn; // 背景视频亮起 + 播放
+    const decor = animated || tvOn;                 // 扫描线 / 亮带 / 颗粒 / 压暗：电视开了才有
+    const fx = swarm === true && tvOn;              // 电视开机：整屏一震 + 闪
 
     return (
-        <div className="fixed inset-0 overflow-hidden overscroll-none touch-none select-none">
-            {/* 背景：字符视频，方框出现时开始“解码”扫描入场 */}
-            <AsciiVideo src="/media/kitten-540p.mp4" revealed={phase === "block"} className="fixed inset-0 z-0"/>
-            {/* 中心压暗，保证文字可读 */}
-            <div className="pointer-events-none fixed inset-0 z-0 bg-[radial-gradient(ellipse_at_center,rgba(0,0,0,0.35)_0%,rgba(0,0,0,0)_55%)]"/>
-            {/* CRT 扫描线 + 缓慢滚动的刷新亮带：只盖在背景上，不压住方框和文字 */}
-            <div className="scanlines pointer-events-none fixed inset-0 z-[1]"/>
-            <div className="crt-roll pointer-events-none fixed inset-x-0 top-0 z-[1] h-[18vh]"/>
-            {/* 全屏胶片颗粒 */}
-            <div className="grain pointer-events-none fixed inset-0 z-30 opacity-[0.06] mix-blend-overlay"/>
+        <div className={`fixed inset-0 overflow-hidden overscroll-none touch-none select-none${fx ? " crt-jolt" : ""}`}>
+            {/* 背景：字符视频，电视“开机”时开始“解码”扫描入场并播放（swarm 不拍它，用下面的黑屏替身） */}
+            <div data-swarm-ignore="">
+                <AsciiVideo src="/media/kitten-540p.mp4" revealed={tv} playing={tv} className="fixed inset-0 z-0"/>
+            </div>
+            {standIn && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={BLACK_SCREEN} alt="" aria-hidden="true" draggable={false}
+                     className="pointer-events-none fixed inset-0 z-0 h-full w-full"/>
+            )}
+            {decor && (
+                <>
+                    {/* 中心压暗，保证文字可读 */}
+                    <div className="pointer-events-none fixed inset-0 z-0 bg-[radial-gradient(ellipse_at_center,rgba(0,0,0,0.35)_0%,rgba(0,0,0,0)_55%)]"/>
+                    {/* CRT 扫描线 + 缓慢滚动的刷新亮带：只盖在背景上，不压住方框和文字 */}
+                    <div className="scanlines pointer-events-none fixed inset-0 z-[1]"/>
+                    <div className="crt-roll pointer-events-none fixed inset-x-0 top-0 z-[1] h-[18vh]"/>
+                    {/* 全屏胶片颗粒 */}
+                    <div className="grain pointer-events-none fixed inset-0 z-30 opacity-[0.06] mix-blend-overlay"/>
+                </>
+            )}
+            {/* 显像管通电的亮线 + 闪烁 */}
+            {fx && <div className="crt-flash pointer-events-none fixed inset-0 z-40" aria-hidden="true"/>}
 
             <main className="relative z-10 grid h-full place-items-center p-4 sm:p-20">
-                {sizes && (
+                {sizes && phase !== "wait" && (
                     <LayoutGroup>
                         {phase !== "block" ? (
-                            /* 阶段 1~3：整句入场 → 非首字母收拢 → UWU.CAT 放大 */
-                            <div
-                                className="relative flex flex-wrap justify-center items-end font-bold"
-                                style={{
-                                    fontSize: phase === "title" ? sizes.big : sizes.small,
-                                    transition: `font-size ${GROW_DUR}s cubic-bezier(${EASE_IN_OUT.join(",")})`,
-                                }}
-                            >
-                                {splits.map(({pre, first, post}, idx) => (
-                                    <span key={idx} className="inline-flex items-end leading-[1.25]">
-                                        {idx > 0 && (
+                            wordsOnly ? (
+                                /* 第一轮 swarm：整句由光标一词一词画出来 */
+                                <WordsLine fontSize={sizes.small}/>
+                            ) : (
+                                /* 阶段 1~3：整句入场 → 非首字母收拢 → UWU.CAT 放大 */
+                                <div
+                                    ref={titleRef}
+                                    className={`relative flex flex-wrap justify-center items-end font-bold${nya && !animated ? " title-boop" : ""}`}
+                                    style={{
+                                        fontSize: phase === "title" ? sizes.big : sizes.small,
+                                        transition: `font-size ${GROW_DUR}s cubic-bezier(${EASE_IN_OUT.join(",")})`,
+                                    }}
+                                >
+                                    {splits.map(({pre, first, post}, idx) => (
+                                        <span key={idx} className="inline-flex items-end leading-[1.25]">
+                                            {idx > 0 && (
+                                                <motion.span
+                                                    className="inline-block"
+                                                    initial={{width: "0.3em"}}
+                                                    animate={{width: collapsed ? "0em" : "0.3em"}}
+                                                    transition={{duration: COLLAPSE_DUR, ease: EASE_IN_OUT, delay: idx * COLLAPSE_STAGGER}}
+                                                />
+                                            )}
+                                            <Rest text={pre} idx={idx} collapsed={collapsed} animated={animated}/>
                                             <motion.span
-                                                className="inline-block"
-                                                initial={{width: "0.3em"}}
-                                                animate={{width: collapsed ? "0em" : "0.3em"}}
-                                                transition={{duration: COLLAPSE_DUR, ease: EASE_IN_OUT, delay: idx * COLLAPSE_STAGGER}}
-                                            />
-                                        )}
-                                        <Rest text={pre} idx={idx} collapsed={collapsed}/>
-                                        <motion.span
-                                            layoutId={`initial-${idx}`}
-                                            className="inline-block title-ink"
-                                            initial={{opacity: 0, y: 24, filter: "blur(10px)"}}
-                                            animate={{opacity: 1, y: 0, filter: "blur(0px)"}}
-                                            transition={{duration: IN_DUR, ease: EASE_OUT, delay: idx * IN_STAGGER}}
-                                        >
-                                            {first}
-                                        </motion.span>
-                                        <Rest text={post} idx={idx} collapsed={collapsed}/>
-                                    </span>
-                                ))}
-                                {phase === "title" && <Nya/>}
-                            </div>
+                                                layoutId={`initial-${idx}`}
+                                                className="inline-block title-ink"
+                                                initial={animated ? {opacity: 0, y: 24, filter: "blur(10px)"} : false}
+                                                animate={{opacity: 1, y: 0, filter: "blur(0px)"}}
+                                                transition={{duration: IN_DUR, ease: EASE_OUT, delay: idx * IN_STAGGER}}
+                                            >
+                                                {first}
+                                            </motion.span>
+                                            <Rest text={post} idx={idx} collapsed={collapsed} animated={animated} kern={sizes.kerns[idx]}/>
+                                        </span>
+                                    ))}
+                                    {/* 普通开场：放大后自己冒出来；swarm 开场：光标拍了一下才冒 */}
+                                    {phase === "title" && (animated ? <Nya/> : nya && <Nya delay={0}/>)}
+                                </div>
+                            )
                         ) : (
-                            /* 阶段 4：方框展开，大标题飞入成为小标题 */
-                            <div className="relative w-full max-w-[40rem]">
+                            /* 阶段 4：大标题飞入方框位置；swarm 开场时方框先隐藏，第二轮由光标画出来 */
+                            <div ref={cardRef} className="relative w-full max-w-[40rem]" style={cardShown ? undefined : {visibility: "hidden"}}>
                                 {/* 玻璃底板：先横向展开成一条线，再纵向打开 */}
                                 <motion.div
                                     className="absolute inset-0 overflow-hidden bg-black/70 backdrop-blur-xl ring-1 ring-white/10 shadow-[0_40px_120px_-30px_rgba(0,0,0,0.95)]"
-                                    initial={{clipPath: "inset(50% 50% 50% 50%)"}}
+                                    initial={animated ? {clipPath: "inset(50% 50% 50% 50%)"} : false}
                                     animate={{clipPath: ["inset(50% 50% 50% 50%)", "inset(50% 0% 50% 0%)", "inset(0% 0% 0% 0%)"]}}
                                     transition={{duration: 1.0, times: [0, 0.45, 1], ease: EASE_IN_OUT, delay: 0.1}}
                                 >
@@ -238,20 +492,22 @@ export default function Home() {
                                     <div className="absolute inset-0 bg-[radial-gradient(120%_80%_at_0%_0%,rgba(206,255,28,0.08),transparent_55%)]"/>
                                     <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/40 to-transparent"/>
                                     <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent"/>
-                                    {/* 一次性的光泽扫过 */}
-                                    <motion.div
-                                        className="absolute inset-y-0 w-1/3 -skew-x-12 bg-gradient-to-r from-transparent via-white/[0.08] to-transparent"
-                                        initial={{left: "-40%"}}
-                                        animate={{left: "140%"}}
-                                        transition={{duration: 1.3, ease: EASE_IN_OUT, delay: 1.0}}
-                                    />
+                                    {/* 一次性的光泽扫过（swarm 开场时在电视亮起的那一下） */}
+                                    {(animated || tvOn) && (
+                                        <motion.div
+                                            className="absolute inset-y-0 w-1/3 -skew-x-12 bg-gradient-to-r from-transparent via-white/[0.08] to-transparent"
+                                            initial={{left: "-40%"}}
+                                            animate={{left: "140%"}}
+                                            transition={{duration: 1.3, ease: EASE_IN_OUT, delay: animated ? 1.0 : 0.35}}
+                                        />
+                                    )}
                                 </motion.div>
 
                                 {CORNERS.map(({cls, from}, i) => (
                                     <motion.span
                                         key={i}
                                         className={`absolute size-3 border-accent ${cls}`}
-                                        initial={{opacity: 0, ...from}}
+                                        initial={animated ? {opacity: 0, ...from} : false}
                                         animate={{opacity: 1, x: 0, y: 0}}
                                         transition={{duration: 0.6, ease: EASE_OUT, delay: 0.9}}
                                     />
@@ -261,15 +517,23 @@ export default function Home() {
                                     {/* 左：Logo + 标题 + 副标题 */}
                                     <div className="flex flex-col flex-1">
                                         <div className="flex items-center gap-2">
+                                            {/* swarm 开场时由光标拖过来、上色的就是它；第二轮快照不拍（画布上已经有那个 logo 了） */}
                                             <motion.div
-                                                initial={{opacity: 0, scale: 0.4, rotate: -180}}
+                                                ref={logoRef}
+                                                data-swarm-ignore=""
+                                                initial={animated ? {opacity: 0, scale: 0.4, rotate: -180} : false}
                                                 animate={{opacity: 1, scale: 1, rotate: 0}}
                                                 transition={{type: "spring", stiffness: 140, damping: 16, delay: 0.85}}
                                                 whileHover={{rotate: 90}}
                                             >
                                                 <Logo/>
                                             </motion.div>
-                                            <span className="inline-flex text-3xl md:text-4xl font-bold leading-[1.25] tracking-[0.02em]">
+                                            {/* 标题：一直可见（方框隐藏时也是）；第二轮 swarm 里保留原样，不重画 */}
+                                            <span
+                                                data-swarm-keep=""
+                                                className="inline-flex text-3xl md:text-4xl font-bold leading-[1.25] tracking-[0.02em]"
+                                                style={{visibility: "visible"}}
+                                            >
                                                 {splits.map(({first}, idx) => (
                                                     <motion.span
                                                         key={idx}
@@ -284,7 +548,7 @@ export default function Home() {
                                         </div>
                                         <motion.p
                                             className="mt-2 pl-10 md:pl-12 font-mono text-[11px] leading-relaxed tracking-wide text-white/50"
-                                            {...fadeUp(1.0)}
+                                            {...fadeUp(1.0, animated)}
                                         >
                                             In a cat’s eyes, all things belong to dreams.
                                         </motion.p>
@@ -293,7 +557,7 @@ export default function Home() {
                                     {/* 分隔线 */}
                                     <motion.div
                                         className="hidden md:block w-px self-stretch origin-top bg-gradient-to-b from-transparent via-white/20 to-transparent"
-                                        initial={{scaleY: 0}}
+                                        initial={animated ? {scaleY: 0} : false}
                                         animate={{scaleY: 1}}
                                         transition={{duration: 0.8, ease: EASE_IN_OUT, delay: 0.95}}
                                     />
@@ -307,7 +571,7 @@ export default function Home() {
                                                 target="_blank"
                                                 rel="noreferrer"
                                                 className="group relative inline-flex items-center gap-1.5 self-start md:self-end font-mono text-xs uppercase tracking-[0.18em] text-white/85 transition-colors hover:text-accent after:absolute after:left-0 after:-bottom-0.5 after:h-px after:w-full after:origin-right after:scale-x-0 after:bg-accent after:transition-transform after:duration-300 hover:after:origin-left hover:after:scale-x-100"
-                                                {...fadeUp(1.1 + i * 0.08)}
+                                                {...fadeUp(1.1 + i * 0.08, animated)}
                                             >
                                                 {label}
                                                 <ArrowIcon/>
@@ -316,7 +580,7 @@ export default function Home() {
                                         <div className="flex-1 min-h-3"/>
                                         <motion.p
                                             className="font-mono text-[10px] uppercase leading-relaxed tracking-[0.16em] text-white/35 md:text-right"
-                                            {...fadeUp(1.3)}
+                                            {...fadeUp(1.3, animated)}
                                         >
                                             © Ctrlcvs
                                             <br/>
@@ -329,6 +593,8 @@ export default function Home() {
                     </LayoutGroup>
                 )}
             </main>
+            {/* Swarm 光标（基于 Joel Califa 的 Swarm），只由上面的开场调用：不显示悬浮按钮、不绑快捷键 */}
+            <Script src="/swarm-cursors.js" strategy="afterInteractive" data-trigger="none" data-hotkey=""/>
         </div>
     );
 }
