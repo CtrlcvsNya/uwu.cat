@@ -108,6 +108,7 @@
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const nextFrame = () => new Promise((r) => requestAnimationFrame(() => r()));
   const f1 = (n) => Math.round(n * 10) / 10;
+  const wrapDeg = (a) => ((((a + 180) % 360) + 360) % 360) - 180;
 
   function alphaOf(c) {
     if (!c || c === "transparent") return 0;
@@ -1622,6 +1623,11 @@
 .badge{position:absolute;transform:translate(-50%);padding:1px 4px;border-radius:2px;color:#fff;font:600 11px/16px Inter,system-ui,-apple-system,"Segoe UI",sans-serif;white-space:nowrap;font-variant-numeric:tabular-nums}
 .cursor{position:absolute;left:0;top:0;will-change:transform}
 .cursor svg{position:absolute;overflow:visible;filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.28))}
+.pings{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+.ping{position:absolute;width:24px;height:24px;margin:-12px 0 0 -12px;border-radius:50%;border:2px solid var(--c);opacity:0;animation:ping 1.1s cubic-bezier(.15,.7,.3,1) both}
+.ping.sm{border-width:1.5px;animation:pingsm .55s cubic-bezier(.15,.7,.3,1) both}
+@keyframes ping{0%{opacity:.95;transform:scale(.4)}100%{opacity:0;transform:scale(9)}}
+@keyframes pingsm{0%{opacity:.9;transform:scale(.3)}100%{opacity:0;transform:scale(2.6)}}
 .rulers{position:absolute;inset:0;pointer-events:none}
 .ruler{position:absolute;background:#2c2c2c;pointer-events:none}
 .ruler svg{display:block}
@@ -1777,6 +1783,7 @@
 <div class="layer over"></div>
 <div class="intro"></div>
 <div class="logo"><i class="g"></i><i class="c"></i></div>
+<div class="pings"></div>
 <svg class="ov"></svg>
 <div class="badges"></div>
 <div class="cursors"></div>
@@ -1800,6 +1807,7 @@
       this.world = $(".world");
       this.intro = $(".intro");
       this.logo = $(".logo");
+      this.pings = $(".pings");
       this.ov = $(".ov");
       this.badges = $(".badges");
       this.cursorsEl = $(".cursors");
@@ -1912,6 +1920,15 @@
         return d;
       });
       this.bdStart = this.env.geom().sy;
+    }
+
+    // a ring spreading out from (x, y) viewport px; small = a quick little "got it"
+    ping(x, y, color, small) {
+      const d = document.createElement("div");
+      d.className = small ? "ping sm" : "ping";
+      d.setAttribute("style", `left:${f1(x)}px;top:${f1(y)}px;--c:${color}`);
+      this.pings.appendChild(d);
+      setTimeout(() => d.remove(), small ? 650 : 1200);
     }
 
     // clear the previous build (session mode builds more than once)
@@ -2084,7 +2101,7 @@
         }
         seen.add(c.id);
         const X = c.sticky ? c.x : c.x - vp.sx + vp.ox;
-        const Y = c.sticky ? c.y : c.y - vp.sy + vp.oy;
+        const Y = (c.sticky ? c.y : c.y - vp.sy + vp.oy) - (c.hop || 0);
         el.style.transform = `translate(${f1(X)}px,${f1(Y)}px)`;
         const svg = el.firstChild;
         if (el._shape !== c.shape) {
@@ -2095,7 +2112,7 @@
           el._hy = hy;
           svg.style.transformOrigin = `${hx}px ${hy}px`;
         }
-        const s = 1 - c.press * 0.12;
+        const s = (1 - c.press * 0.12) * (1 + (c.pulse || 0) * 0.32);
         svg.style.transform = `translate(${-el._hx}px,${-el._hy}px) rotate(${f1(c.angle)}deg) scale(${s})`;
       }
       for (const [id, el] of this.cursorEls)
@@ -2578,6 +2595,12 @@
           c.follow = false;
           c.warm = 0.3; // start slow, then up to full speed
           this.peelT = 0.16;
+          // carry on the way it was flying and swing round, rather than a hard turn
+          const sp = Math.hypot(c.vx, c.vy);
+          const cap = sp > 700 ? 700 / sp : 1;
+          c.peelV = { vx: c.vx * cap, vy: c.vy * cap };
+          c.angle = wrapDeg(c.angle);
+          c.turnSlow = 0.5;
         }
         c.task = t;
         c.worked = true;
@@ -2594,7 +2617,9 @@
         if (c.follow || c.solo) continue;
         c.press = Math.max(0, c.press - dt * 6);
         if (c.warm < 1) c.warm = Math.min(1, c.warm + dt * 1.1);
-        if (c.angle !== 0) c.angle = Math.abs(c.angle) < 0.5 ? 0 : c.angle * (1 - Math.min(1, dt * 10));
+        if (c.turnSlow > 0) c.turnSlow -= dt;
+        c.angle = wrapDeg(c.angle);
+        if (c.angle !== 0) c.angle = Math.abs(c.angle) < 0.5 ? 0 : c.angle * (1 - Math.min(1, dt * (c.turnSlow > 0 ? 3 : 10)));
         if (!c.task && this.idleOrbit && !c.leaving) {
           c.follow = true;
           c.gen = null;
@@ -2683,9 +2708,29 @@
         return false;
       }
       for (const c of list) {
+        if (c.carryAng != null && this._carryG) {
+          // it was holding the logo: let go by easing back out, nose turning slowly
+          const g = this._carryG;
+          const dx = c.x - g.x;
+          const dy = c.y - g.y;
+          const L = Math.hypot(dx, dy) || 1;
+          const out = rand(150, 240);
+          const side = rand(-60, 60);
+          c.vx = (dx / L) * out - (dy / L) * side;
+          c.vy = (dy / L) * out + (dx / L) * side;
+          c.turnSlow = 0.7;
+          c.angle = wrapDeg(c.angle);
+        }
         c.carryAng = null;
+        c.carryAt = null;
         c.gripped = false;
+        c.approach = null;
       }
+      return this.circle(dt, list, gathering);
+    }
+
+    // circle the orbit point (a ring of given radii, or the default swirl), else wander / gather
+    circle(dt, list, gathering) {
       const o = this.orbitAt ? this.orbitAt() : null;
       if (o && o.rx) return this.follow(dt, list, o, o.rx / 135, (o.ry || o.rx) / o.rx, 0.05);
       if (o) return this.follow(dt, list, o, this.orbitScale, this.orbitSquash);
@@ -2693,40 +2738,103 @@
       return this.follow(dt, list);
     }
 
+    // everyone who's holding the carried thing has got a grip
+    allGripped() {
+      return this.cursors.filter((c) => c.follow && !c.solo && !c.task).every((c) => c.gripped);
+    }
+
     // Everyone grabs the edge of the thing being carried (this.carry() = {x, y, r} in
     // world px): tips on its rim, pointing in, following it as it moves.
     carryStep(dt, list) {
       const g = this.carry();
+      this._carryG = g;
       if (list.some((c) => c.carryAng == null)) {
         // keep their current order round the rim so nobody crosses over
         const ang = (c) => Math.atan2(c.y - g.y, c.x - g.x);
         const sorted = [...list].sort((a, b) => ang(a) - ang(b));
         const base = ang(sorted[0]);
         sorted.forEach((c, i) => (c.carryAng = base + (i / sorted.length) * Math.PI * 2));
+        // they don't all pounce at once: one after another, in no particular order
+        const order = list.filter((c) => c.carryAt == null).sort(() => Math.random() - 0.5);
+        order.forEach((c, i) => (c.carryAt = this.time + i * 0.11 + rand(0, 0.08)));
       }
+      const waiting = list.filter((c) => this.time < c.carryAt);
+      if (waiting.length) this.circle(dt, waiting);
       for (const c of list) {
+        if (this.time < c.carryAt) continue; // not its turn yet: still circling
         // where its grip on the rim is (a faint, steady tremble, like hands holding on)
         const a = c.carryAng + 0.04 * Math.sin(this.time * 2.1 + c.id * 1.3);
         const r = g.r + 1 + 0.8 * Math.sin(this.time * 2.7 + c.id);
         const px = g.x + Math.cos(a) * r;
         const py = g.y + Math.sin(a) * r;
         const d = Math.hypot(px - c.x, py - c.y);
-        // reaching for it: ease in. Once it has hold, it moves rigidly with the logo, in
-        // step with the cursor dragging it (no lag, so they read as carrying it together)
-        if (c.gripped && d > 30) c.gripped = false;
-        const k = c.gripped ? 1 : Math.min(1, dt * (d > 40 ? 9 : 16));
-        if (!c.gripped && d < 2.5) c.gripped = true;
-        const nx = c.x + (px - c.x) * k;
-        const ny = c.y + (py - c.y) * k;
-        c.vx = (nx - c.x) / Math.max(dt, 0.001);
-        c.vy = (ny - c.y) / Math.max(dt, 0.001);
-        c.x = nx;
-        c.y = ny;
+        if (c.gripped && d > 30) {
+          c.gripped = false;
+          c.approach = null;
+        }
+        if (!c.gripped) {
+          // fly in like any other move: leave along the way it was already going, swing
+          // round in an arc and come in to the rim head-on, slowing down as it arrives
+          // (a cubic Bezier; the start tangent matches its orbit velocity)
+          if (!c.approach) {
+            const sp = Math.hypot(c.vx, c.vy);
+            const cap = sp > 900 ? 900 / sp : 1;
+            // swing out sideways like the other moves do, bulging the way it was already circling
+            const qx = -(py - c.y) / (d || 1);
+            const qy = (px - c.x) / (d || 1);
+            const along = qx * c.vx + qy * c.vy;
+            const side = Math.abs(along) > 30 ? Math.sign(along) : Math.random() < 0.5 ? -1 : 1;
+            c.approach = {
+              x0: c.x, y0: c.y, vx: c.vx * cap, vy: c.vy * cap, t: 0,
+              dur: clamp(0.5 + d / 1000, 0.55, 1.05),
+              qx, qy, bend: side * rand(0.12, 0.22) * Math.min(d, 600),
+            };
+          }
+          const A = c.approach;
+          A.t += dt;
+          const k = Math.min(1, A.t / A.dur);
+          const e = k * (2 - k); // ease-out: quick to leave, gentle to land
+          const nx0 = Math.cos(a);
+          const ny0 = Math.sin(a);
+          const p1x = A.x0 + (A.vx * A.dur) / 6;
+          const p1y = A.y0 + (A.vy * A.dur) / 6;
+          const p2x = px + nx0 * 46;
+          const p2y = py + ny0 * 46;
+          const u = 1 - e;
+          const arc = Math.sin(Math.PI * e) * A.bend;
+          const bx = u * u * u * A.x0 + 3 * u * u * e * p1x + 3 * u * e * e * p2x + e * e * e * px + A.qx * arc;
+          const by = u * u * u * A.y0 + 3 * u * u * e * p1y + 3 * u * e * e * p2y + e * e * e * py + A.qy * arc;
+          c.vx = (bx - c.x) / Math.max(dt, 0.001);
+          c.vy = (by - c.y) / Math.max(dt, 0.001);
+          c.x = bx;
+          c.y = by;
+          // nose along the flight, turning to face the logo as it comes in
+          const fly = (Math.atan2(c.vy, c.vx) * 180) / Math.PI + 128;
+          const inward = (Math.atan2(g.y - c.y, g.x - c.x) * 180) / Math.PI + 128;
+          const aim = k < 0.7 ? fly : inward;
+          const turnF = ((((aim - c.angle + 540) % 360) + 360) % 360) - 180;
+          c.angle = wrapDeg(c.angle + turnF * Math.min(1, dt * 12));
+          c.press += (0 - c.press) * Math.min(1, dt * 8);
+          if (k >= 1) {
+            c.gripped = true;
+            c.approach = null;
+            // "got it": a small ring and a soft tick
+            const p = this.scr(c);
+            this.view.ping(p.x, p.y, c.color, true);
+            if (this.sfx) this.sfx.grip(p.x, this.vp.vw, c.id);
+          }
+          continue;
+        }
+        // has hold: moves rigidly with the logo, in step with the cursor dragging it
+        c.vx = (px - c.x) / Math.max(dt, 0.001);
+        c.vy = (py - c.y) / Math.max(dt, 0.001);
+        c.x = px;
+        c.y = py;
         const want = (Math.atan2(g.y - c.y, g.x - c.x) * 180) / Math.PI + 128;
         const turn = ((((want - c.angle + 540) % 360) + 360) % 360) - 180;
-        c.angle += turn * Math.min(1, dt * 10);
-        // a light, steady grip
-        c.press += ((d < 6 ? 0.45 : 0) - c.press) * Math.min(1, dt * 8);
+        c.angle = wrapDeg(c.angle + turn * Math.min(1, dt * 10));
+        // a light, steady grip; a firmer squeeze while it's lifted
+        c.press += ((d < 6 ? (this.carryLift ? 0.75 : 0.45) : 0) - c.press) * Math.min(1, dt * 8);
       }
     }
 
@@ -2897,9 +3005,10 @@
           c.vy += ny * 260;
         }
       for (const c of list) {
+        if (c.turnSlow > 0) c.turnSlow -= dt;
         if (Math.hypot(c.vx, c.vy) < 30) continue;
         const d = ((((Math.atan2(c.vy, c.vx) * 180) / Math.PI + 128 - c.angle + 540) % 360) + 360) % 360 - 180;
-        c.angle += d * Math.min(1, dt * 8);
+        c.angle = wrapDeg(c.angle + d * Math.min(1, dt * (c.turnSlow > 0 ? 2.5 : 8)));
         c.press = Math.max(0, c.press - dt * 6);
       }
       return touched;
@@ -2921,6 +3030,34 @@
       if (dist < 0.5) {
         c.x = p0.x;
         c.y = p0.y;
+        if (o.onStep) o.onStep();
+        return;
+      }
+      // Just left the orbit for this job: fly the first leg as one smooth curve that
+      // starts out along the way it was already moving and bends round to the target
+      // (a cubic Bezier, start tangent = its orbit velocity, easing to a stop on arrival).
+      const mv = c.peelV;
+      c.peelV = null;
+      if (mv) {
+        const Tr = clamp(0.3 + dist / 700, 0.45, 0.9);
+        const sp = Math.hypot(mv.vx, mv.vy);
+        const cap = sp > 520 ? 520 / sp : 1;
+        const p1x = x0 + (mv.vx * cap * Tr) / 3;
+        const p1y = y0 + (mv.vy * cap * Tr) / 3;
+        let tr = 0;
+        while (tr < Tr) {
+          tr += yield;
+          const k = Math.min(1, tr / Tr);
+          const p = get();
+          const u = 1 - k;
+          const w3 = 3 * u * k * k + k * k * k;
+          c.x = u * u * u * x0 + 3 * u * u * k * p1x + w3 * p.x;
+          c.y = u * u * u * y0 + 3 * u * u * k * p1y + w3 * p.y;
+          if (o.onStep) o.onStep();
+        }
+        const p = get();
+        c.x = p.x;
+        c.y = p.y;
         if (o.onStep) o.onStep();
         return;
       }
@@ -3832,6 +3969,46 @@
       this.piano(E2 + 12, t + 0.05, 0.3, 0, 2.5);
     }
 
+    // session mode: a cursor calling the others, "hey!" (the second one a step higher)
+    call(x, vw, k = 0) {
+      this.log("call", [x, vw, k]);
+      if (!this.ready()) return;
+      const t = this.now() + 0.01;
+      const pan = this.pan(x, vw);
+      const lo = k ? E2 + 33 : E2 + 31;
+      this.piano(lo, t, 0.24, pan, 1.4);
+      this.piano(lo + 5, t + 0.09, 0.22, pan, 1.7);
+    }
+
+    // one of them takes hold
+    grip(x, vw, id = 0) {
+      this.log("grip", [x, vw, id]);
+      if (!this.ready()) return;
+      const t = this.now() + 0.004;
+      const pan = this.pan(x, vw);
+      this.tick(t, pan, 2200 + (id % 5) * 180, 4, 0.16, 0.012);
+      this.piano(E2 + 40 + PENTA[id % 5], t, 0.06, pan, 0.9);
+    }
+
+    // everyone lifts / sets it down
+    lift(x, vw) {
+      this.log("lift", [x, vw]);
+      if (!this.ready()) return;
+      const t = this.now() + 0.01;
+      const pan = this.pan(x, vw) * 0.5;
+      [E2 + 19, E2 + 24, E2 + 28].forEach((m, i) => this.piano(m, t + i * 0.05, 0.16, pan, 1.6));
+    }
+
+    land(x, vw) {
+      this.log("land", [x, vw]);
+      if (!this.ready()) return;
+      const t = this.now() + 0.01;
+      const pan = this.pan(x, vw) * 0.5;
+      this.tick(t, pan, 520, 1.4, 0.22, 0.06);
+      this.piano(E2 + 12, t, 0.2, pan, 2.2);
+      this.piano(E2 + 19, t + 0.03, 0.14, pan, 2);
+    }
+
     // session mode: a little rising chirp when a cursor pats the title ("Nya~")
     boop(x, vw) {
       this.log("boop", [x, vw]);
@@ -4534,11 +4711,17 @@
         scale = 1 + 0.14 * Math.sin(Math.PI * k) * (1 - k * 0.4);
         if (k >= 1) L.popT = -1;
       }
-      const key = `${f1(L.x)},${f1(L.y)},${f1(L.size)},${f1(L.paint * 100)},${f1(scale * 100)}`;
+      // lifted while carried: a touch bigger, with a soft shadow under it
+      const liftTo = L.liftTo || 0;
+      L.lift = (L.lift || 0) + (liftTo - (L.lift || 0)) * Math.min(1, dt * (liftTo ? 9 : 12));
+      if (Math.abs(L.lift - liftTo) < 0.002) L.lift = liftTo;
+      scale *= 1 + 0.09 * L.lift;
+      const key = `${f1(L.x)},${f1(L.y)},${f1(L.size)},${f1(L.paint * 100)},${f1(scale * 100)},${f1(L.lift * 100)}`;
       if (key === this._logoKey) return;
       this._logoKey = key;
       el.style.width = el.style.height = f1(L.size) + "px";
       el.style.transform = `translate(${f1(L.x - L.size / 2)}px,${f1(L.y - L.size / 2)}px) scale(${f1(scale * 1000) / 1000})`;
+      el.style.filter = L.lift > 0.01 ? `drop-shadow(0 ${f1(10 * L.lift)}px ${f1(9 * L.lift)}px rgba(0,0,0,.6))` : "";
       const c = el.querySelector(".c");
       c.style.display = L.paint > 0 ? "" : "none";
       // the glow reaches outside the box, so open the clip on every side but the bottom
@@ -4615,11 +4798,6 @@
       const E = this.engine;
       const L = this.logo;
       const W = (x, y) => E.fromViewport(x, y);
-      if (carry)
-        E.carry = () => {
-          const w = W(L.x, L.y);
-          return { x: w.x, y: w.y, r: L.size * 0.5 };
-        };
       c.shape = "arrow";
       let hold = { x: L.size * 0.14, y: L.size * 0.08 }; // where the cursor grabs it
       yield* E.moveTo(c, () => W(L.x + hold.x, L.y + hold.y), { speed: 0.55 });
@@ -4644,6 +4822,24 @@
         const k = t.size / from.size;
         return W(t.x + hold.x * k, t.y + hold.y * k);
       };
+      if (carry) {
+        // it's ready: call the others over (twice), then wait until everyone has hold
+        this.logoBusy = true;
+        yield* this.callCrew(c);
+        E.carry = () => {
+          const w = W(L.x, L.y);
+          return { x: w.x, y: w.y, r: L.size * 0.5 };
+        };
+        let waited = 0;
+        while (waited < 2.4 && !E.allGripped()) waited += yield;
+        // "and... up": one small nod, then everyone lifts it together
+        yield* this.callGesture(c, 0.24, 5, false);
+        E.carryLift = true;
+        L.liftTo = 1;
+        if (this.sfx) this.sfx.lift(E.scr(c).x, E.vp.vw);
+        let w = 0;
+        while (w < 0.22) w += yield;
+      }
       const start = { x: c.x, y: c.y };
       const e0 = end();
       const total = Math.max(1, Math.hypot(e0.x - start.x, e0.y - start.y));
@@ -4665,12 +4861,49 @@
       Object.assign(L, getTo());
       this.logoAnchor = getTo;
       this.logoBusy = false;
-      if (this.sfx) this.sfx.place("image", L.x, L.y, L.size, L.size, E.vp.vw, E.vp.vh, 0);
-      yield* E.wait(0.25);
-      if (carry) E.carry = null; // put down: let go
+      if (carry) {
+        // set it down (a little settle), then let go
+        L.liftTo = 0;
+        E.carryLift = false;
+        if (this.sfx) this.sfx.land(E.scr(c).x, E.vp.vw);
+        let w = 0;
+        while (w < 0.3) w += yield;
+        E.carry = null;
+      } else if (this.sfx) this.sfx.place("image", L.x, L.y, L.size, L.size, E.vp.vw, E.vp.vh, 0);
       yield* E.wait(0.15);
       c.ov = null;
       done();
+    }
+
+    // The cursor calls the crew: two short "hey!"s. Each one: it hops up and swells,
+    // gives a little wiggle, a ring goes out from its tip and a two-note chirp.
+    *callCrew(c) {
+      for (let k = 0; k < 2; k++) {
+        yield* this.callGesture(c, 0.34, 10, true, k);
+        let w = 0;
+        while (w < 0.14) w += yield;
+      }
+    }
+
+    *callGesture(c, dur, height, loud, k = 0) {
+      const E = this.engine;
+      if (loud) {
+        const p = E.scr(c);
+        this.view.ping(p.x, p.y, c.color);
+        if (this.sfx) this.sfx.call(p.x, E.vp.vw, k);
+      }
+      let t = 0;
+      while (t < dur) {
+        t += yield;
+        const u = Math.min(1, t / dur);
+        const bell = Math.sin(Math.PI * u);
+        c.hop = bell * height;
+        c.pulse = loud ? bell : bell * 0.4;
+        c.angle = Math.sin(u * Math.PI * 3) * (loud ? 16 : 6) * (1 - u);
+      }
+      c.hop = 0;
+      c.pulse = 0;
+      c.angle = 0;
     }
 
     // drag the bottom-right handle until the logo is `size` (top-left corner stays put)
