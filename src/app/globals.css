@@ -127,3 +127,9 @@ body {
   68%  { transform: scale(1.01, 0.99); }
   100% { transform: scale(1, 1); }
 }
+
+/* swarm 第二阶段：关着的电视上一条条复制出来的扫描线（开机那一闪时撤掉，换成真正的扫描线） */
+.tv-scanline {
+  background: rgba(0, 0, 0, 0.55);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03);
+}

@@ -43,8 +43,9 @@ const TIMELINE: [Phase, number][] = [
 // 1. 一个光标把 logo 拖到那句话下方（够低，光标绕着它转圈时不挡字）
 // 2. 光标把整句话画出来，画完后围着 logo 转圈，一个光标去点底部的 Play
 // 3. 页面播放收拢动画：UWU.CAT 放大，一个光标飞过去拍它一下 → 弹出 Nya~ → 飞进方框位置
-// 4. 底部的进度条弹出来：第二轮重建的头两个 layer 是“把 logo 缩小并拖进方框”和“从上往下给它上色”，
-//    做完之后光标再一个接一个离开圈子去干活：重建背景视频（一块黑屏）和方框
+// 4. 底部的进度条弹出来：第二轮重建的头两个 layer 是“把 logo 缩小并拖进方框”（其他光标一起摸着它端过去）
+//    和“从上往下给它上色”，做完之后光标再一个接一个去干活：重建电视（玻璃屏、复制出来的扫描线）和方框；
+//    先干完的光标绕着屏幕中间（方框外面一圈）转
 // 6. 全部完成后 Play 出现，一个光标按下；光标从两边散开离场，然后电视“开机”：一震一闪，视频亮起并开始播放
 // 光标绕圈是扁椭圆：横向约 ±140px，纵向约 ±70px（ORBIT_* 两个参数）
 type SwarmSession = {
@@ -114,9 +115,58 @@ const CLICK_PROMPTS = [
 ];
 const PROMPT_STEP = 1.5; // 每种语言停留（秒）
 
-// 第二轮里背景视频的替身：一张黑图，光标会把它当成一块媒体框画出来（所以“视频一开始是黑的”）
-const BLACK_SCREEN =
-    "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9' preserveAspectRatio='none'%3E%3Crect width='16' height='9'/%3E%3C/svg%3E";
+// 第二轮里背景视频的替身：一块关着的 CRT 屏幕（深灰玻璃、圆角、四周压暗、左上角一点反光），
+// 光标会把它当成一块媒体框画出来（所以“视频一开始是黑的”），开机那一闪时换成真正的字符视频
+const TV_GLASS =
+    "data:image/svg+xml," +
+    encodeURIComponent(
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 160 90' preserveAspectRatio='none'>" +
+        "<defs>" +
+        "<radialGradient id='g' cx='50%' cy='46%' r='72%'>" +
+        "<stop offset='0' stop-color='#1d2126'/><stop offset='.55' stop-color='#0d0f12'/><stop offset='1' stop-color='#030304'/>" +
+        "</radialGradient>" +
+        "<radialGradient id='s' cx='22%' cy='10%' r='45%'>" +
+        "<stop offset='0' stop-color='#fff' stop-opacity='.07'/><stop offset='1' stop-color='#fff' stop-opacity='0'/>" +
+        "</radialGradient>" +
+        "</defs>" +
+        "<rect width='160' height='90' fill='#000'/>" +
+        "<rect x='1.4' y='1.8' width='157.2' height='86.4' rx='5' ry='7.5' fill='url(#g)'/>" +
+        "<rect x='1.4' y='1.8' width='157.2' height='86.4' rx='5' ry='7.5' fill='url(#s)'/></svg>",
+    );
+
+/**
+ * 关着的电视上的扫描线：先画一条，然后大家一起往下复制粘贴，每一步都是好几个光标同时在贴：
+ *   1 条线 → 3 个光标各复制一条贴到下面（4 条一组）
+ *   → 3 个光标各复制这一组贴到下面（16 条一块）
+ *   → 剩下的光标一起把这一块贴满整个屏幕
+ * 结构：同一层的兄弟节点一模一样（data-swarm-repeat），swarm 把第一个当母版、其余当副本，
+ * 副本都只依赖母版，所以可以同时贴；下一层要等上一层的母版完整了才开始。
+ */
+const SCAN_FAN = 4; // 每一层：1 个母版 + 3 个副本
+
+function ScanLines({blocks}: { blocks: number }) {
+    const H = window.innerHeight;
+    const lines = blocks * SCAN_FAN * SCAN_FAN;
+    const lineH = Math.max(1, Math.round((H / lines) * 0.42));
+    const slot = (i: number, n: number) => ({top: `${(i * 100) / n}%`, height: `${100 / n}%`});
+    const rows = (render: (i: number) => React.ReactNode, n: number) => Array.from({length: n}, (_, i) => render(i));
+    return (
+        <div className="absolute inset-0">
+            {rows((b) => (
+                <div key={b} data-swarm-repeat="" className="absolute inset-x-0" style={slot(b, blocks)}>
+                    {rows((q) => (
+                        <div key={q} data-swarm-repeat="" className="absolute inset-x-0" style={slot(q, SCAN_FAN)}>
+                            {rows((l) => (
+                                <div key={l} className="tv-scanline absolute inset-x-0"
+                                     style={{top: `${(l * 100) / SCAN_FAN}%`, height: lineH}}/>
+                            ), SCAN_FAN)}
+                        </div>
+                    ), SCAN_FAN)}
+                </div>
+            ), blocks)}
+        </div>
+    );
+}
 
 // 按词拆“首字母/其余”，首字母连起来正好是 UWU.CAT
 type Split = { pre: string; first: string; post: string };
@@ -423,11 +473,18 @@ export default function Home() {
                     size: LOGO_PARKED_SIZE,
                 };
             };
-            // 第二阶段光标在方框下方转圈，不挡方框里的字
-            const nest = () => {
+            // 第二阶段没活干的光标绕着屏幕中间转：一圈套在方框外面的椭圆，不挡方框里的字
+            const ring = () => {
                 const r = cardRef.current?.getBoundingClientRect();
-                if (!r) return parked();
-                return {x: r.left + r.width / 2, y: Math.min(r.bottom + ORBIT_HALF_H + 10, window.innerHeight - ORBIT_HALF_H - 64)};
+                const W = window.innerWidth;
+                const H = window.innerHeight;
+                if (!r) return {x: W / 2, y: H / 2};
+                return {
+                    x: r.left + r.width / 2,
+                    y: r.top + r.height / 2,
+                    rx: Math.min(r.width / 2 + 60, W / 2 - 16),
+                    ry: Math.min(r.height / 2 + 48, H / 2 - 70),
+                };
             };
             // 方框里真 logo 的位置和大小（方框隐藏时也已经排好版）
             const home = () => {
@@ -484,11 +541,18 @@ export default function Home() {
                 await step(wait(NYA_DUR + 0.1));
                 setPhase("block");
                 await step(wait(FLY_DUR + 0.15));
+                // 卡顿时飞入动画可能还没走完：等标题每个字母都真正落定（没有残留的位移），再拍第二轮的快照，
+                // 否则画布上保留的标题会停在半空中的位置
+                for (let i = 0; i < 60; i++) {
+                    const letters = [...document.querySelectorAll("main [data-swarm-keep] > span")];
+                    if (letters.length && letters.every((e) => getComputedStyle(e).transform === "none")) break;
+                    await step(wait(0.05));
+                }
 
-                // 4. 光标们挪到方框下方转圈；第二轮重建开始，底部进度条弹出。头两个 layer：
-                //    一个光标把 logo 缩小、拖到方框里它的位置，再从上往下给它上色；
-                //    之后光标一个接一个去重建背景视频（黑屏）和方框，标题保持不动
-                s.orbit(nest);
+                // 4. 第二轮重建开始，底部进度条弹出。头两个 layer：一个光标把 logo 缩小、拖到方框里它的位置
+                //    （其他光标一起摸着它端过去），再从上往下给它上色；之后大家去重建电视和方框，
+                //    先干完的围着中间转，标题保持不动
+                s.orbit(ring);
                 await step(s.build({
                     prepare: () => flushSync(() => {
                         setCardShown(true);
@@ -533,10 +597,13 @@ export default function Home() {
             <div data-swarm-ignore="">
                 <AsciiVideo src="/media/kitten-540p.mp4" revealed={tv} playing={tv} className="fixed inset-0 z-0"/>
             </div>
+            {/* 第二轮重建时的“关着的电视”：一块玻璃屏 + 一条条复制出来的扫描线；开机时撤掉 */}
             {standIn && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={BLACK_SCREEN} alt="" aria-hidden="true" draggable={false}
-                     className="pointer-events-none fixed inset-0 z-0 h-full w-full"/>
+                <div className="pointer-events-none fixed inset-0 z-0" aria-hidden="true">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={TV_GLASS} alt="" draggable={false} className="absolute inset-0 h-full w-full"/>
+                    <ScanLines blocks={clamp(Math.round(window.innerHeight / (6 * SCAN_FAN * SCAN_FAN)), 3, SWARM_CREW)}/>
+                </div>
             )}
             {decor && (
                 <>
@@ -702,7 +769,7 @@ export default function Home() {
                                             className="font-mono text-[10px] uppercase leading-relaxed tracking-[0.16em] text-white/35 md:text-right"
                                             {...fadeUp(1.3, animated)}
                                         >
-                                            © Ctrlcvs
+                                            © CTRLCVS@UWU.CAT
                                             <br/>
                                             not for sale, AI last.
                                         </motion.p>

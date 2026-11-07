@@ -39,7 +39,8 @@
  * Session mode (added for uwu.cat): s = SwarmCursors.session(opts) covers the page
  * with a blank canvas and keeps one crew of cursors for a whole scripted intro; it
  * returns null if it could not start. The cursors ignore the visitor's pointer.
- *   opts: { logo: { svg, color, glow }, crew (default 7), orbitScale, orbitSquash,
+ *   opts: { logo: { svg, color, glow }, crew (default 7), tempo (pace, default 1),
+ *           orbitScale, orbitSquash,
  *           builds (how many s.build() calls, so only the last one ends on the
  *           big chord), playDelay, onAbort() }
  *         onAbort runs when the visitor presses Esc / ✕ (the overlay is gone).
@@ -49,12 +50,14 @@
  *                       does the same from code, e.g. for Enter / Space)
  *   s.logoDrag(() => ({x,y,size}))  a cursor drags it there (resizing on the way)
  *   s.logoPaint()       a cursor colours it in, top to bottom
- *   s.orbit(true | () => ({x, y}))  idle cursors circle the logo / that point
+ *   s.orbit(true | () => ({x, y, rx?, ry?}))  idle cursors circle the logo / that point
+ *                       (with rx / ry: a clean ring of those radii, e.g. round a box)
  *   s.tap(() => ({x, y}))  a cursor pats that spot; resolves on the pat
  *   s.build({prepare, logo})  covers the page, calls prepare() synchronously (render
  *                       what should be rebuilt, e.g. with flushSync), snapshots it and
  *                       builds it; resolves when built. With logo: () => ({x,y,size}),
- *                       moving the logo there and painting it are its first two layers
+ *                       moving the logo there (the idle crew holds on to it) and painting
+ *                       it are its first two layers; nothing else starts before they're done
  *   s.clickPlay()       a cursor clicks a Play button in the bar; resolves on the click
  *   s.reveal()          the canvas turns transparent (live page shows, cursors stay)
  *   s.relayout()        call after the page re-laid itself out (window resized):
@@ -62,6 +65,8 @@
  *   s.leave()           the cursors leave to both sides; resolves when they are gone
  *   s.close()           removes the overlay at once
  * Elements with data-swarm-keep are part of a snapshot but start out built.
+ * Siblings marked data-swarm-repeat are duplicated as a whole however many layers
+ * they hold (nest them in pairs to get "draw one, copy, copy the two, copy the four...").
  */
 (() => {
   "use strict";
@@ -1322,7 +1327,9 @@
       const buckets = new Map();
       for (const k of node.kids) {
         const n = k.end - k.start;
-        if (n < 1 || n > 48) continue;
+        // [data-swarm-repeat]: a big repeated block is still copy-pasted as one piece
+        const big = k.el && k.el.hasAttribute && k.el.hasAttribute("data-swarm-repeat");
+        if (n < 1 || (n > 48 && !big)) continue;
         if (items[k.start].keep) continue; // already built, nothing to duplicate
         // long single paragraphs read better typed than duplicated
         if (n === 1 && items[k.start].kind === "text" && items[k.start].text.length > 40) continue;
@@ -2279,6 +2286,7 @@
       this.idleOrbit = false; // session mode: cursors without work circle instead of wandering/leaving
       this.calm = !!crew; // session mode: no hyperactive cursors, steady swirl
       this.peelT = 0; // stagger cursors leaving the orbit for work
+      this.tempoScale = 1; // session mode: overall pace of every cursor action
       const vp = this.vp;
       for (let n = 0; n < (crew || INTRO_AGENTS); n++) {
         const side = n % 2 === 0;
@@ -2469,7 +2477,8 @@
       for (const t of list) {
         const y = this.taskY(t);
         const u = y >= top && y <= bot ? 0 : y < top ? 1 : 2;
-        const s = u * 1e6 + (u === 1 ? top - y : y) * 0.6 + Math.abs(y - cy) * 0.4 - (t.spec.type === "guide" ? 5e5 : 0);
+        // scripted jobs (moving the logo) go first: everything visible waits on them
+        const s = u * 1e6 + (u === 1 ? top - y : y) * 0.6 + Math.abs(y - cy) * 0.4 - (t.spec.type === "guide" ? 5e5 : 0) - (t.spec.type === "script" ? 2e6 : 0);
         if (s < bestS) {
           bestS = s;
           best = t;
@@ -2494,7 +2503,7 @@
       this.vel = Math.max(this.vel * Math.exp(-dt * 1.2), this.vel * 0.7 + sv * 0.3);
       if (this.started) this.frontier = Math.max(this.frontier, this.viewBot);
       const avail = this.started ? this.available() : [];
-      this.tempo = clamp(2.1 + this.vel / 900 + (avail.length / Math.max(1, this.cursors.length)) * 0.5, 2.1, 4.5) * this.speed;
+      this.tempo = clamp(2.1 + this.vel / 900 + (avail.length / Math.max(1, this.cursors.length)) * 0.5, 2.1, 4.5) * this.speed * this.tempoScale;
 
       if (this.rulers.want > 0) this.rulers.lastNeed = this.time;
       const rt = this.time - this.rulers.lastNeed < 0.7 ? 1 : 0;
@@ -2534,18 +2543,15 @@
         return;
       }
       if (!this.started) {
-        const center = this.orbitAt ? this.orbitAt() : this.fromViewport(vp.ox + vp.vw / 2, vp.oy + vp.vh / 2);
-        const o = !!this.orbitAt;
-        if (this.follow(dt, this.cursors.filter((c) => !c.solo), center, o ? this.orbitScale : 0.7, o ? this.orbitSquash : 1) && this.ready) this.start();
+        if (this.herd(dt, this.cursors.filter((c) => !c.solo), true) && this.ready) this.start();
         return;
       }
-      if (this.cursors.some((c) => c.follow && !c.solo))
-        this.follow(
+      // (while something is carried, the holders move after the cursor dragging it,
+      // at the end of this step, so they're in the same frame as the logo)
+      if (!this.carry && this.cursors.some((c) => c.follow && !c.solo))
+        this.herd(
           dt,
           this.cursors.filter((c) => c.follow && !c.solo),
-          null,
-          this.orbitScale,
-          this.orbitSquash,
         );
 
       this.spawnCooldown -= dt;
@@ -2626,6 +2632,10 @@
           }
         }
       }
+      if (this.carry) {
+        const holders = this.cursors.filter((c) => c.follow && !c.solo && !c.task);
+        if (holders.length) this.carryStep(dt, holders);
+      }
     }
 
     flockTarget() {
@@ -2658,10 +2668,66 @@
           if (!c.gen) c.gen = this.leave(c);
           if (c.gen.next(dt).done) this.cursors.splice(this.cursors.indexOf(c), 1);
         }
-        if (stay.length) this.follow(dt, stay, null, this.orbitScale, this.orbitSquash);
+        if (stay.length) this.herd(dt, stay);
         return;
       }
-      this.follow(dt, this.cursors.filter((c) => !c.solo), null, this.orbitScale, this.orbitSquash);
+      this.herd(dt, this.cursors.filter((c) => !c.solo));
+    }
+
+    // Move the idle crew: hold on to the logo while it's carried, else circle the orbit
+    // point (a ring of given radii, or the default swirl), else wander / gather.
+    herd(dt, list, gathering) {
+      if (!list.length) return false;
+      if (this.carry) {
+        this.carryStep(dt, list);
+        return false;
+      }
+      for (const c of list) {
+        c.carryAng = null;
+        c.gripped = false;
+      }
+      const o = this.orbitAt ? this.orbitAt() : null;
+      if (o && o.rx) return this.follow(dt, list, o, o.rx / 135, (o.ry || o.rx) / o.rx, 0.05);
+      if (o) return this.follow(dt, list, o, this.orbitScale, this.orbitSquash);
+      if (gathering) return this.follow(dt, list, this.fromViewport(this.vp.ox + this.vp.vw / 2, this.vp.oy + this.vp.vh / 2), 0.7);
+      return this.follow(dt, list);
+    }
+
+    // Everyone grabs the edge of the thing being carried (this.carry() = {x, y, r} in
+    // world px): tips on its rim, pointing in, following it as it moves.
+    carryStep(dt, list) {
+      const g = this.carry();
+      if (list.some((c) => c.carryAng == null)) {
+        // keep their current order round the rim so nobody crosses over
+        const ang = (c) => Math.atan2(c.y - g.y, c.x - g.x);
+        const sorted = [...list].sort((a, b) => ang(a) - ang(b));
+        const base = ang(sorted[0]);
+        sorted.forEach((c, i) => (c.carryAng = base + (i / sorted.length) * Math.PI * 2));
+      }
+      for (const c of list) {
+        // where its grip on the rim is (a faint, steady tremble, like hands holding on)
+        const a = c.carryAng + 0.04 * Math.sin(this.time * 2.1 + c.id * 1.3);
+        const r = g.r + 1 + 0.8 * Math.sin(this.time * 2.7 + c.id);
+        const px = g.x + Math.cos(a) * r;
+        const py = g.y + Math.sin(a) * r;
+        const d = Math.hypot(px - c.x, py - c.y);
+        // reaching for it: ease in. Once it has hold, it moves rigidly with the logo, in
+        // step with the cursor dragging it (no lag, so they read as carrying it together)
+        if (c.gripped && d > 30) c.gripped = false;
+        const k = c.gripped ? 1 : Math.min(1, dt * (d > 40 ? 9 : 16));
+        if (!c.gripped && d < 2.5) c.gripped = true;
+        const nx = c.x + (px - c.x) * k;
+        const ny = c.y + (py - c.y) * k;
+        c.vx = (nx - c.x) / Math.max(dt, 0.001);
+        c.vy = (ny - c.y) / Math.max(dt, 0.001);
+        c.x = nx;
+        c.y = ny;
+        const want = (Math.atan2(g.y - c.y, g.x - c.x) * 180) / Math.PI + 128;
+        const turn = ((((want - c.angle + 540) % 360) + 360) % 360) - 180;
+        c.angle += turn * Math.min(1, dt * 10);
+        // a light, steady grip
+        c.press += ((d < 6 ? 0.45 : 0) - c.press) * Math.min(1, dt * 8);
+      }
     }
 
     // push every cursor away from o (session mode: the logo was clicked)
@@ -2729,7 +2795,7 @@
     }
 
     // Boids-ish orbit around a target, ported from the original.
-    follow(dt, list, target, scale = 1, squash = 1) {
+    follow(dt, list, target, scale = 1, squash = 1, wobble = 0.3) {
       const m = this.mouse ? this.fromViewport(this.mouse.x, this.mouse.y) : null;
       const o = target || this.flockTarget();
       const time = this.time;
@@ -2739,7 +2805,8 @@
         this.tv.y += ((m.y - this.lastT.y) / dt - this.tv.y) * k;
       }
       this.lastT = m;
-      const R = 135 * scale * (1 + 0.18 * Math.sin(time * 0.55));
+      const ring = wobble < 0.3; // a clean ring (around a box) rather than the loose swirl
+      const R = 135 * scale * (1 + (ring ? 0.03 : 0.18) * Math.sin(time * 0.55));
       // (calm: always the same way round, never stalling while it reverses)
       const swirl = this.calm ? 0.8 : Math.tanh(Math.cos(time * 0.11) * 3);
       const want = [];
@@ -2751,8 +2818,8 @@
         const nx = vx / d;
         const ny = vy / d;
         const ang = Math.atan2(vy, vx);
-        const off = (c.orbit - 120) * 0.55 * scale;
-        const rr = R * (1 + 0.3 * Math.sin(3 * ang + time * 0.7)) + off;
+        const off = (c.orbit - 120) * 0.55 * scale * (ring ? 0.12 : 1);
+        const rr = R * (1 + wobble * Math.sin(3 * ang + time * 0.7)) + off;
         const tang = 300 * (0.7 + c.spin * 0.2) * swirl;
         const rad = clamp((rr - d) * 4, -2600, 1400);
         const far = Math.min(1, Math.max(0, (d - rr) / 600));
@@ -4143,6 +4210,7 @@
       E.crewMax = crew;
       E.idleOrbit = true;
       E.orbitScale = S.orbitScale || 0.6;
+      E.tempoScale = S.tempo || 1;
       E.orbitSquash = S.orbitSquash || 0.5;
       this.sfx = new Sound();
       this.sfx.init();
@@ -4229,11 +4297,16 @@
     addLogoJobs(model, getTo) {
       const L = this.logo;
       const job = (run, deps) => ({ id: 0, y: L.y, spec: { type: "script", run }, deps, state: "wait", doneAt: 0, layer: "world", gate: 0 });
-      const move = job((c) => this.grabLogo(c, getTo, () => {}), []);
+      const move = job((c) => this.grabLogo(c, getTo, () => {}, true), []);
       const paint = job((c) => this.paintLogo(c, () => {}), [move]);
-      for (const t of model.tasks) t.deps = [...t.deps, paint];
+      this.gateOnLogo(model.tasks, paint);
       model.tasks = [move, paint, ...model.tasks];
       model.tasks.forEach((t, i) => (t.id = i));
+    }
+
+    // nothing else starts until the logo is in place and painted
+    gateOnLogo(tasks, paint) {
+      for (const t of tasks) if (t.spec.type !== "script") t.deps = [...t.deps, paint];
     }
 
     // The page changed size mid-build: snapshot it again in its new layout. Pieces that
@@ -4258,7 +4331,7 @@
       const scripts = this.model.tasks.filter((t) => t.spec.type === "script");
       if (scripts.length) {
         const last = scripts[scripts.length - 1];
-        if (last.state !== "done") for (const t of m.tasks) t.deps = [...t.deps, last];
+        if (last.state !== "done") this.gateOnLogo(m.tasks, last);
         m.tasks = [...scripts, ...m.tasks];
         m.tasks.forEach((t, i) => (t.id = i));
       }
@@ -4307,7 +4380,8 @@
     }
 
     // where idle cursors circle: true = around the logo, a function = around that
-    // viewport point, false = they wander
+    // viewport point ({x, y}, or {x, y, rx, ry} for a clean ring of those radii, e.g.
+    // around a box), false = they wander
     orbit(target) {
       if (this.dead) return;
       const E = this.engine;
@@ -4315,7 +4389,8 @@
       else if (typeof target === "function")
         E.orbitAt = () => {
           const p = target();
-          return E.fromViewport(p.x, p.y);
+          const w = E.fromViewport(p.x, p.y);
+          return p.rx ? { x: w.x, y: w.y, rx: p.rx, ry: p.ry || p.rx } : w;
         };
       else E.orbitAt = () => (this.logo ? E.fromViewport(this.logo.x, this.logo.y) : E.fromViewport(innerWidth / 2, innerHeight / 2));
     }
@@ -4535,10 +4610,16 @@
       });
     }
 
-    *grabLogo(c, getTo, done) {
+    // carry: the rest of the idle crew holds on to the logo while it's resized and moved
+    *grabLogo(c, getTo, done, carry) {
       const E = this.engine;
       const L = this.logo;
       const W = (x, y) => E.fromViewport(x, y);
+      if (carry)
+        E.carry = () => {
+          const w = W(L.x, L.y);
+          return { x: w.x, y: w.y, r: L.size * 0.5 };
+        };
       c.shape = "arrow";
       let hold = { x: L.size * 0.14, y: L.size * 0.08 }; // where the cursor grabs it
       yield* E.moveTo(c, () => W(L.x + hold.x, L.y + hold.y), { speed: 0.55 });
@@ -4569,7 +4650,7 @@
       c.press = 1;
       this.logoBusy = true;
       yield* E.moveTo(c, end, {
-        speed: 0.36,
+        speed: carry ? 0.2 : 0.36, // carried by the whole crew: slower, steadier
         drag: true,
         onStep: () => {
           const t = getTo();
@@ -4585,7 +4666,9 @@
       this.logoAnchor = getTo;
       this.logoBusy = false;
       if (this.sfx) this.sfx.place("image", L.x, L.y, L.size, L.size, E.vp.vw, E.vp.vh, 0);
-      yield* E.wait(0.4);
+      yield* E.wait(0.25);
+      if (carry) E.carry = null; // put down: let go
+      yield* E.wait(0.15);
       c.ov = null;
       done();
     }
