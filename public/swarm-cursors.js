@@ -3454,6 +3454,16 @@
       if (this.ctx && this.ctx.state === "suspended" && this.ctx.resume) this.ctx.resume().catch(() => {});
     }
 
+    // iOS mutes Web Audio with the ring / silent switch by default. The Audio Session
+    // API (newer Safari) can ask for "playback" instead, so the sounds play anyway.
+    // Note this is a non-mixing session: it pauses other audio (e.g. music) while ours plays.
+    playThroughSilent() {
+      try {
+        const s = navigator.audioSession;
+        if (s && s.type !== "playback") s.type = "playback";
+      } catch (_) {}
+    }
+
     get blocked() {
       return !!this.ctx && this.ctx.state !== "running" && this.fakeNow == null;
     }
@@ -4486,6 +4496,7 @@
           E.kick(E.fromViewport(L.x, L.y), 1100);
           const sfx = this.sfx;
           if (sfx && sfx.ctx) {
+            sfx.playThroughSilent();
             const ready = sfx.ctx.state === "running" ? Promise.resolve() : sfx.ctx.resume();
             ready
               .then(() => {
