@@ -483,7 +483,7 @@ export default function Home() {
                     x: r.left + r.width / 2,
                     y: r.top + r.height / 2,
                     rx: Math.min(r.width / 2 + 60, W / 2 - 16),
-                    ry: Math.min(r.height / 2 + 48, H / 2 - 70),
+                    ry: Math.min(r.height / 2 + 72, H / 2 - 70),
                 };
             };
             // 方框里真 logo 的位置和大小（方框隐藏时也已经排好版）
@@ -775,6 +775,22 @@ export default function Home() {
                                         </motion.p>
                                     </div>
                                 </div>
+
+                                {/* 方框下方一行小字：源码仓库 + 许可证（第二轮由光标敲出来） */}
+                                <motion.p
+                                    className="absolute inset-x-0 top-full mt-4 flex justify-center gap-2 font-mono text-[10px] uppercase tracking-[0.2em] text-white/35"
+                                    {...fadeUp(1.4, animated)}
+                                >
+                                    <a href="https://github.com/CtrlcvsNya/uwu.cat" target="_blank" rel="noreferrer"
+                                       className="transition-colors hover:text-accent">
+                                        Source on GitHub
+                                    </a>
+                                    <span aria-hidden="true">·</span>
+                                    <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noreferrer license"
+                                       className="transition-colors hover:text-accent">
+                                        CC BY-SA 4.0
+                                    </a>
+                                </motion.p>
                             </div>
                         )}
                     </LayoutGroup>
