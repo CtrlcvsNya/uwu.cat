@@ -769,7 +769,7 @@ export default function Home() {
                                             className="font-mono text-[10px] uppercase leading-relaxed tracking-[0.16em] text-white/35 md:text-right"
                                             {...fadeUp(1.3, animated)}
                                         >
-                                            © CTRLCVS@UWU.CAT
+                                            © CTRLCVS
                                             <br/>
                                             not for sale, AI last.
                                         </motion.p>
