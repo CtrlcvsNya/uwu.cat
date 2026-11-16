@@ -1,8 +1,13 @@
 {
-  "name": "catuwu",
+  "name": "eternitv",
   "version": "0.1.0",
   "private": true,
+  "description": "Eternitv — a personal landing page with a WebGL ASCII video background.",
   "license": "CC-BY-SA-4.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/QHLQY/Eternitv.git"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
