@@ -48,8 +48,9 @@ CLI alternative: `npx vercel` for a preview, `npx vercel --prod` to publish.
 
 ### Cloudflare Workers
 
-Every push to `main` is built and deployed to Cloudflare Workers by GitHub Actions.
-To deploy your own fork, add a repository secret `CLOUDFLARE_API_TOKEN` (an API token created from the **Edit Cloudflare Workers** template) and change `account_id` / `name` / `routes` in `wrangler.jsonc`. Manual deploy: `npm run deploy`.
+This fork deploys to Vercel, so the Cloudflare workflow was removed.
+The manual path still works if you ever want it back: `npm run deploy`
+(needs `CLOUDFLARE_API_TOKEN` and your own `account_id` / `name` / `routes` in `wrangler.jsonc`).
 
 ## License
 
