@@ -28,6 +28,19 @@ type Props = {
     accent?: string;
     /** 渲染帧率上限 */
     maxFps?: number;
+    /** 画面放大倍数：>1 相当于镜头推近，裁掉四周边缘 */
+    zoom?: number;
+    /** 放大时的对焦点（0..1，相对画面），默认居中。想让主体避开中间卡片可调它 */
+    focusX?: number;
+    focusY?: number;
+    /** 镜头缓慢漂移的幅度：0 = 完全静止，1 = 默认的推拉 + 平移量。用来避免"背景是一张静止的图" */
+    drift?: number;
+    /** 漂移速度倍数，默认 1（一个来回约 30s） */
+    driftSpeed?: number;
+    /** 全屏扫掠水波强度：0 = 关闭，1 = 默认。一条斜带持续扫过整屏，只动画面不动构图 */
+    wave?: number;
+    /** 水波扫完一整屏的时间（秒），默认 16 */
+    wavePeriod?: number;
     className?: string;
     style?: React.CSSProperties;
 };
@@ -90,6 +103,8 @@ uniform vec3  uRipples[MAX_RIPPLES]; // 每个水波: x, y, 产生时间
 uniform float uReveal;     // 0..1 入场进度
 uniform float uMotion;     // 1 = 正常, 0 = 用户偏好减少动态效果
 uniform vec3  uAccent;
+uniform float uWave;       // 全屏扫掠水波强度 0..1
+uniform float uWavePeriod; // 扫完一整屏的秒数
 uniform vec2  uCurve;      // 屏幕弧度；手机竖屏时为 0（平铺）
 uniform float uDpr;        // 设备像素比，用于让扫描线按 CSS 像素对齐
 
@@ -144,17 +159,33 @@ void main() {
         splash = max(splash, (1.0 - smoothstep(0.0, uCellSize.y * 3.0, dist)) * (1.0 - smoothstep(0.0, 0.35, age)));
     }
 
+    // ---- 全屏扫掠水波：一条斜带从左上进入、右下离开，整屏都会轮到一次 ----
+    // 只改采样偏移和亮度，不动构图 —— 画面主体位置和我们调的 zoom/focus 完全无关
+    float wpos = fract(uTime / uWavePeriod) * 1.4 - 0.2;
+    float wn   = (cell.x / uGrid.x) * 0.70 + (cell.y / uGrid.y) * 0.30;
+    float wb   = (wn - wpos) * 7.0;
+    float wave = exp(-wb * wb) * uWave;
+    float ripple = sin(wb * 2.0) * wave;
+
     vec2 cuv = (cell + 0.5) / uGrid - disp * wl * 0.45 / (uGrid * uCellSize);
+    cuv += vec2(0.70, 0.30) * ripple * 2.0 / uGrid;      // 波前折射：最多错开约 2 个字符格
     vec3 col = texture2D(uCells, clamp(cuv, 0.0, 1.0)).rgb;
 
     float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
-    lum = smoothstep(0.03, 0.95, lum + dot(disp, vec2(0.12)) * 0.5);
+    // 波峰提亮、波谷压暗：让整条带像水波而不是一块移动的光斑
+    lum = smoothstep(0.03, 0.95, lum + dot(disp, vec2(0.12)) * 0.5 + ripple * 0.22);
 
     // 护眼：饱和度/亮度只做轻微提升；字符不再随机抖动和闪烁（只在交互时才乱码）
     vec3 base = mix(vec3(lum), col, 1.2) * 1.05;
     vec3 c = base;
+    // 波峰带一点主色粉，和页面配色呼应
+    c = mix(c, c * 1.2 + uAccent * 0.10, wave * 0.6);
 
     float g = floor(lum * (uGlyphs - 1.0) + 0.5);
+    // 波峰里少量字符短暂“解码”乱码，波过去立刻恢复
+    if (wave > 0.55 && flick < (wave - 0.55) * 0.5) {
+        g = 1.0 + floor(hash(cell + floor(uTime * 4.0) * 1.37) * (uGlyphs - 1.0));
+    }
 
     float md = length(center - uMouse.xy) / max(uMouse.z, 1.0);
     float m  = (1.0 - smoothstep(0.0, 1.0, md)) * uMouse.w;
@@ -267,8 +298,15 @@ export default function AsciiVideo({
                                        revealDuration = 1.8,
                                        cellSize = 7,
                                        charset = DEFAULT_CHARSET,
-                                       accent = "#ceff1c",
+                                       accent = "#f5a9b8",
                                        maxFps = 30,
+                                       zoom = 1,
+                                       focusX = 0.5,
+                                       focusY = 0.5,
+                                       drift = 0,
+                                       driftSpeed = 1,
+                                       wave = 0,
+                                       wavePeriod = 16,
                                        className,
                                        style,
                                    }: Props) {
@@ -338,6 +376,7 @@ export default function AsciiVideo({
             grid: U("uGrid"), glyphs: U("uGlyphs"), time: U("uTime"),
             mouse: U("uMouse"), ripples: U("uRipples"), reveal: U("uReveal"), motion: U("uMotion"),
             accent: U("uAccent"), curve: U("uCurve"), dpr: U("uDpr"),
+            wave: U("uWave"), wavePeriod: U("uWavePeriod"),
         };
         const G = (name: string) => gl.getUniformLocation(gridProg, name);
         const ug = {video: G("uVideo"), prev: G("uPrev"), grid: G("uGrid"), cover: G("uCover"), blend: G("uBlend")};
@@ -379,19 +418,47 @@ export default function AsciiVideo({
 
         const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
         gl.uniform1f(u.motion, reduceMotion ? 0 : 1);
+        // 减少动态效果时连全屏水波一起关掉
+        gl.uniform1f(u.wave, reduceMotion ? 0 : wave);
+        gl.uniform1f(u.wavePeriod, Math.max(2, wavePeriod));
 
         // ---------- 尺寸 / atlas ----------
         const fontFamily =
             getComputedStyle(document.body).getPropertyValue("--font-geist-mono").trim() || "monospace";
         let dpr = 1, cellW = 1, cellH = 1, cols = 1, rows = 1;
 
+        const start = performance.now();
+        const now = () => (performance.now() - start) / 1000;
+
         let cover: [number, number, number, number] = [0, 0, 1, 1];
-        const updateCover = () => {
+
+        // 每帧重算采样窗口：等比铺满 → 放大 → 叠加缓慢漂移（推拉 + 平移）。
+        // 视频本身只有水母在慢慢飘，画面整体是静止的；加这层“镜头”之后背景才会一直有呼吸感。
+        const driftAmp = reduceMotion ? 0 : drift;
+        const updateCover = (t: number) => {
             const vw = video.videoWidth, vh = video.videoHeight;
             if (!vw || !vh) return;
             const a = (cols * cellW) / (rows * cellH);
             const v = vw / vh;
-            cover = a > v ? [0, (1 - v / a) / 2, 1, v / a] : [(1 - a / v) / 2, 0, a / v, 1];
+            const base: [number, number, number, number] =
+                a > v ? [0, (1 - v / a) / 2, 1, v / a] : [(1 - a / v) / 2, 0, a / v, 1];
+
+            // 三个互不整除的周期（约 26s / 37s / 31s）：叠起来看不出规律，也不会和 30s 的回文循环对上
+            const tt = t * driftSpeed;
+            const wobble = 1 + 0.10 * driftAmp * Math.sin(tt * 0.242);         // 推近 / 拉远
+            const fx = focusX + 0.15 * driftAmp * Math.sin(tt * 0.169 + 1.1);  // 左右摇
+            const fy = focusY + 0.11 * driftAmp * Math.cos(tt * 0.203);        // 上下摇
+            // 放大 = 按比例收窄采样窗口；对焦点保持不动（0.5 即居中裁切）
+            const z = 1 / Math.max(1, zoom * wobble);
+            const cx = Math.min(1, Math.max(0, fx));
+            const cy = Math.min(1, Math.max(0, fy));
+
+            cover = [
+                base[0] + base[2] * (1 - z) * cx,
+                base[1] + base[3] * (1 - z) * cy,
+                base[2] * z,
+                base[3] * z,
+            ];
         };
 
         const resize = () => {
@@ -427,7 +494,7 @@ export default function AsciiVideo({
                 gl.bindTexture(gl.TEXTURE_2D, t);
                 gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, cols, rows, 0, gl.RGBA, gl.UNSIGNED_BYTE, black);
             }
-            updateCover();
+            updateCover(now());
         };
 
         const ro = new ResizeObserver(resize);
@@ -445,7 +512,7 @@ export default function AsciiVideo({
         };
         if (hasVFC) vfcHandle = video.requestVideoFrameCallback(onVideoFrame);
 
-        const onMeta = () => updateCover();
+        const onMeta = () => updateCover(now());
         video.addEventListener("loadedmetadata", onMeta);
 
         // 标签页隐藏时暂停视频，省电
@@ -484,8 +551,6 @@ export default function AsciiVideo({
         document.documentElement.addEventListener("pointerleave", onLeave);
 
         // ---------- 渲染循环 ----------
-        const start = performance.now();
-        const now = () => (performance.now() - start) / 1000;
         let reveal = 0; // 入场扫描是一次性的，减少动态效果时也保留；只关闭持续闪烁
         let last = 0;
         let raf = 0;
@@ -510,6 +575,7 @@ export default function AsciiVideo({
             }
 
             // 第一遍：视频 → 每格颜色，与上一帧指数平滑（时间常数约 0.1s）
+            updateCover(now());
             const next = 1 - cellCur;
             gl.useProgram(gridProg);
             gl.bindFramebuffer(gl.FRAMEBUFFER, cellFbo[next]);
@@ -554,7 +620,7 @@ export default function AsciiVideo({
             gl.deleteProgram(prog);
             gl.deleteProgram(gridProg);
         };
-    }, [src, cellSize, charset, accent, maxFps, revealDuration]);
+    }, [src, cellSize, charset, accent, maxFps, revealDuration, zoom, focusX, focusY, drift, driftSpeed, wave, wavePeriod]);
 
     return (
         <div className={className} style={{background: "#000", ...style}} aria-hidden="true">

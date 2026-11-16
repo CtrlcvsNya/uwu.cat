@@ -3,13 +3,18 @@
 :root {
   --background: #000000;
   --foreground: #ffffff;
-  --accent: #ceff1c;
+  /* 跨性别旗三色：粉做主色（在蓝色水母背景上最跳），蓝做副色，白留给文字 */
+  --accent: #f5a9b8;
+  --accent-2: #5bcefa;
+  --accent-3: #ffffff;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-accent: var(--accent);
+  --color-accent-2: var(--accent-2);
+  --color-accent-3: var(--accent-3);
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 }
 
@@ -39,9 +44,12 @@ body {
   background-size: 160px 160px;
 }
 
-/* 标题字：上亮下暗的金属渐变 */
+/* 标题字：白 → 粉 → 蓝。
+   注意 stops 不能写 0/46/100：字形只占 1.25em 行盒的中间一段，
+   0% 和 100% 的位置根本看不见，实测会得到"几乎全粉、底部一点蓝"的灰调效果。
+   压到 8/46/82 才能让白顶和蓝底都真正落在字形上。 */
 .title-ink {
-  background: linear-gradient(180deg, #ffffff 0%, #f4f4f4 45%, #a8a8a8 100%);
+  background: linear-gradient(180deg, #ffffff 8%, #f5a9b8 46%, #5bcefa 82%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;

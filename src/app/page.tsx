@@ -5,8 +5,14 @@ import {flushSync} from "react-dom";
 import Script from "next/script";
 import AsciiVideo from "@/app/components/AsciiVideo";
 
-const sentence = "Uplift With Uniqueness . Cats Always Touch";
+// 每个词的首字母连起来 = 大标题（Eternitv）：句首大写、其余小写，正好还原昵称的大小写
+const sentence = "Each turn ends, rest now in the vast";
 const words = sentence.split(" ");
+
+// ---------------- 背景视频 ----------------
+// 换片源只需要改这一行（文件放在 public/media/ 下）。
+// 建议规格：960×540 / 25fps / H.264 / 无音轨 / +faststart，10~15s 循环。
+const BG_VIDEO = "/media/jelly-540p.mp4";
 
 // ---------------- 缓动 ----------------
 const EASE_OUT = [0.16, 1, 0.3, 1] as const;      // easeOutQuint：入场
@@ -179,8 +185,8 @@ const splitWord = (w: string): Split => {
 const splits = words.map(splitWord);
 
 const LINKS = [
-    {label: "X", href: "https://x.com/DaHuangCore"},
-    {label: "Github", href: "https://github.com/CtrlcvsNya"},
+    {label: "X", href: "https://x.com/QHLQY0512"},
+    {label: "Github", href: "https://github.com/QHLQY"},
 ];
 
 const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
@@ -272,8 +278,8 @@ const LOGO_POINTS =
 // swarm 里被光标拖来拖去、上色的那个 logo：和下面的 <Logo/> 同形同色同光晕，最后无缝换成真的
 const LOGO_SWARM = {
     svg: `<svg viewBox="0 0 123 123" fill="currentColor"><polygon points="${LOGO_POINTS}"/></svg>`,
-    color: "#ceff1c",
-    glow: "drop-shadow(0 0 12px rgba(206,255,28,0.45))",
+    color: "#ffffff",
+    glow: "drop-shadow(0 0 12px rgba(255,255,255,0.45))",
 };
 
 /**
@@ -323,7 +329,7 @@ function ClickPrompt() {
 
 const Logo = () => (
     <svg viewBox="0 0 123 123" aria-hidden="true" fill="currentColor"
-         className="w-8 h-8 md:w-10 md:h-10 text-accent drop-shadow-[0_0_12px_rgba(206,255,28,0.45)]">
+         className="w-8 h-8 md:w-10 md:h-10 text-white drop-shadow-[0_0_12px_rgba(255,255,255,0.45)]">
         <polygon points={LOGO_POINTS}/>
     </svg>
 );
@@ -337,7 +343,7 @@ const Nya = ({delay = NYA_DELAY}: { delay?: number }) => (
         aria-hidden="true"
     >
         <motion.span
-            className="block whitespace-nowrap font-bold text-accent drop-shadow-[0_0_12px_rgba(206,255,28,0.55)]"
+            className="block whitespace-nowrap font-bold text-accent drop-shadow-[0_0_12px_rgba(245,169,184,0.6)]"
             initial={{opacity: 0, scale: 0, rotate: 24, y: -8}}
             animate={{
                 opacity: [0, 1, 1, 1, 0],
@@ -595,7 +601,11 @@ export default function Home() {
         <div className={`fixed inset-0 overflow-hidden overscroll-none touch-none select-none${fx ? " crt-jolt" : ""}`}>
             {/* 背景：字符视频，电视“开机”时开始“解码”扫描入场并播放（swarm 不拍它，用下面的黑屏替身） */}
             <div data-swarm-ignore="">
-                <AsciiVideo src="/media/kitten-540p.mp4" revealed={tv} playing={tv} className="fixed inset-0 z-0"/>
+                {/* zoom 把画面推近，focus 对准水母伞体，避免主体被中间卡片挡掉 */}
+                <AsciiVideo src={BG_VIDEO} revealed={tv} playing={tv}
+                            zoom={1.3} focusX={0.58} focusY={0.6} wave={1}
+                            accent="#f5a9b8"
+                            className="fixed inset-0 z-0"/>
             </div>
             {/* 第二轮重建时的“关着的电视”：一块玻璃屏 + 一条条复制出来的扫描线；开机时撤掉 */}
             {standIn && (
@@ -676,7 +686,7 @@ export default function Home() {
                                     transition={{duration: 1.0, times: [0, 0.45, 1], ease: EASE_IN_OUT, delay: 0.1}}
                                 >
                                     <div className="grain absolute inset-0 opacity-[0.08] mix-blend-overlay"/>
-                                    <div className="absolute inset-0 bg-[radial-gradient(120%_80%_at_0%_0%,rgba(206,255,28,0.08),transparent_55%)]"/>
+                                    <div className="absolute inset-0 bg-[radial-gradient(120%_80%_at_0%_0%,rgba(245,169,184,0.10),rgba(91,206,250,0.06)_40%,transparent_62%)]"/>
                                     <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/40 to-transparent"/>
                                     <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent"/>
                                     {/* 一次性的光泽扫过（swarm 开场时在电视亮起的那一下） */}
@@ -737,7 +747,7 @@ export default function Home() {
                                             className="mt-2 pl-10 md:pl-12 font-mono text-[11px] leading-relaxed tracking-wide text-white/50"
                                             {...fadeUp(1.0, animated)}
                                         >
-                                            In a cat’s eyes, all things belong to dreams.
+                                            Nothing is lost in the deep — it only waits its turn.
                                         </motion.p>
                                     </div>
 
@@ -769,9 +779,9 @@ export default function Home() {
                                             className="font-mono text-[10px] uppercase leading-relaxed tracking-[0.16em] text-white/35 md:text-right"
                                             {...fadeUp(1.3, animated)}
                                         >
-                                            © CTRLCVS
+                                            © ETERNITV
                                             <br/>
-                                            not for sale, AI last.
+                                            <span className="whitespace-nowrap">nothing to watch, nothing watching.</span>
                                         </motion.p>
                                     </div>
                                 </div>
@@ -781,9 +791,10 @@ export default function Home() {
                                     className="absolute inset-x-0 top-full mt-4 flex justify-center gap-2 font-mono text-[10px] uppercase tracking-[0.2em] text-white/35"
                                     {...fadeUp(1.4, animated)}
                                 >
+                                    {/* 署名义务：CC BY-SA 4.0 要求保留原作者署名，链接到原始仓库 */}
                                     <a href="https://github.com/CtrlcvsNya/uwu.cat" target="_blank" rel="noreferrer"
                                        className="transition-colors hover:text-accent">
-                                        Source on GitHub
+                                        Design · Ctrlcvs
                                     </a>
                                     <span aria-hidden="true">·</span>
                                     <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noreferrer license"

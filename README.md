@@ -35,6 +35,19 @@ npm run dev        # http://localhost:3000
 
 ## Deployment
 
+The site is a **Next.js static export** (`output: 'export'`), so any static host works.
+
+### Vercel
+
+Import the repo at [vercel.com/new](https://vercel.com/new) and accept the defaults —
+Vercel detects Next.js, runs `npm run build`, and serves the generated `out/` directory.
+No environment variables are needed. Cache headers live in `vercel.json`
+(the Cloudflare-only `public/_headers` is ignored there).
+
+CLI alternative: `npx vercel` for a preview, `npx vercel --prod` to publish.
+
+### Cloudflare Workers
+
 Every push to `main` is built and deployed to Cloudflare Workers by GitHub Actions.
 To deploy your own fork, add a repository secret `CLOUDFLARE_API_TOKEN` (an API token created from the **Edit Cloudflare Workers** template) and change `account_id` / `name` / `routes` in `wrangler.jsonc`. Manual deploy: `npm run deploy`.
 
@@ -42,9 +55,13 @@ To deploy your own fork, add a repository secret `CLOUDFLARE_API_TOKEN` (an API 
 
 [CC BY-SA 4.0](LICENSE) © Ctrlcvs — you may share and adapt this work with attribution, under the same license.
 
-**Exception:** the background video `public/media/kitten-540p.mp4` is a re-encode of
-[“Kitten, Game, Pets”](https://pixabay.com/videos/kitten-game-pets-4216/) by MixailMixail from Pixabay,
-used under the [Pixabay Content License](https://pixabay.com/service/license-summary/). It is **not** covered by CC BY-SA.
+**Exception:** the background videos in `public/media/` are third-party stock footage and are
+**not** covered by CC BY-SA.
+
+| File | Source | License |
+| --- | --- | --- |
+| `jelly-540p.mp4` (current) | [“Beuatiful white jellyfish floating through dark ocean waters”](https://mixkit.co/free-stock-video/beuatiful-white-jellyfish-floating-through-dark-ocean-waters-45404), Mixkit | [Mixkit Restricted License](https://mixkit.co/license/#videoRestricted) — free for personal use only |
+| `kitten-540p.mp4` (unused, kept) | [“Kitten, Game, Pets”](https://pixabay.com/videos/kitten-game-pets-4216/) by MixailMixail | [Pixabay Content License](https://pixabay.com/service/license-summary/) |
 
 `public/swarm-cursors.js` is adapted from the [Swarm Rebuild](https://califa.github.io/swarm-site/) effect by Joel Califa,
 which has no published license; it is used here with the original credit kept and is **not** covered by CC BY-SA.
